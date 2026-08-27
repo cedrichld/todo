@@ -1056,7 +1056,7 @@ function gpPath(W = 1200, H = 12, N = 80) {
 }
 function drawRules() {
   if (!RULES.paths) RULES.paths = Array.from({ length: 10 }, () => gpPath());
-  const dark = document.documentElement.classList.contains('dark'), color = dark ? '%23ece7dc' : '%234a463f', op = dark ? 0.3 : 0.28;
+  const dark = document.documentElement.classList.contains('dark'), color = dark ? '#ece7dc' : '#4a463f', op = dark ? 0.3 : 0.28;
   RULES.paths.forEach((p, i) => {
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 12' preserveAspectRatio='none'><path d='${p.d}' fill='none' stroke='${color}' stroke-opacity='${op}' stroke-width='${p.w}' stroke-linecap='round' stroke-linejoin='round' vector-effect='non-scaling-stroke'/></svg>`;
     document.documentElement.style.setProperty(`--rule-${i + 1}`, `url("data:image/svg+xml,${encodeURIComponent(svg).replace(/%20/g, ' ')}")`);
@@ -1079,20 +1079,30 @@ function setView(v) {
   const main = $('#view'), from = VIEWS.indexOf(S.view), to = VIEWS.indexOf(v), dir = to > from ? 1 : -1;
   localStorage.setItem('view', v); closePopover();
   if (REDUCED.matches || !main.animate) { S.view = v; render(); return; }
-  // the old page slips a touch towards where we came from and fades; the new one arrives from the other side
+  // The old page becomes a ghost that slips a touch towards where we came from and fades, while the new page
+  // arrives from the other side — both at once, on the compositor, so nothing waits and nothing repaints.
   $('#tabs').classList.remove('no-glide');
-  S.view = v; glide();
-  const out = main.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-10 * dir}px)` }], { duration: 110, easing: 'ease-in', fill: 'forwards' });
-  out.finished.then(() => {
-    out.cancel();  // drop the filled end state before the new page comes in
-    render();
-    main.animate([{ opacity: 0, transform: `translateX(${14 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)' });
-  }, () => {});
+  const top = main.getBoundingClientRect().top + window.scrollY, seen = Math.max(0, window.scrollY - top);
+  const ghost = document.createElement('div'); ghost.className = 'ghost'; ghost.style.padding = getComputedStyle(main).padding;
+  const held = document.createElement('div'); held.style.transform = `translateY(${-seen}px)`;
+  while (main.firstChild) held.appendChild(main.firstChild);
+  ghost.appendChild(held);
+  $$('.ghost', main).forEach(g => g.remove());
+  S.view = v; render();
+  const page = document.createElement('div'); page.className = 'page';
+  while (main.firstChild) page.appendChild(main.firstChild);
+  main.appendChild(page); main.appendChild(ghost);
+  const ease = 'cubic-bezier(.2,.7,.2,1)';
+  ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-12 * dir}px)` }], { duration: 200, easing: ease, fill: 'forwards' }).finished.then(() => ghost.remove(), () => ghost.remove());
+  page.animate([{ opacity: 0, transform: `translateX(${14 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 260, easing: ease });
 }
 // the active-tab pill glides to wherever the active tab is (called after counts change width too)
+const TABW = {};  // natural widths of tabs that fold away, measured once
 function glide() {
   const tabs = $('#tabs'), g = $('.glider', tabs), b = $(`#tabs button[data-view="${S.view}"]`); if (!g || !b) return;
-  g.style.width = b.offsetWidth + 'px'; g.style.transform = `translateX(${b.offsetLeft}px)`;
+  if (b.classList.contains('quiet') && TABW[S.view] == null) { b.classList.add('measure'); TABW[S.view] = b.offsetWidth; b.classList.remove('measure'); }
+  const w = b.classList.contains('quiet') ? TABW[S.view] : b.offsetWidth;
+  g.style.width = w + 'px'; g.style.transform = `translateX(${b.offsetLeft}px)`;
   requestAnimationFrame(() => tabs.classList.remove('no-glide'));
 }
 // the History tab changes width while it folds in or out: keep the pill on the active tab as it does

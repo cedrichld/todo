@@ -28,7 +28,7 @@
   :root:not([data-theme="light"]) {
     --bg: #1a1916; --paper: #23221f; --fg: #ece7dc; --muted: #a39d92; --faint: #6d6860; --line: #33312c; --chip: #2a2825; --hover: #201f1c;
     --hl-urgent: rgba(255, 104, 84, .42); --hl-soon: rgba(255, 170, 70, .36); --hl-normal: rgba(246, 226, 76, .32); --hl-later: rgba(96, 160, 245, .75);
-    --vignette: rgba(0, 0, 0, .35); --paper-dark: .16; --paper-light: none;
+    --vignette: rgba(0, 0, 0, .35); --paper-img: url("/paper-dark.jpg"); --paper-blend: screen;
     --accent: #7aa7dc; --urgent: #f0584d; --soon: #f0993a; --normal: #d9b400; --later: #6aa1f2; --done: #6fb26f;
     --wait: #ab93e8; --today: #4cc08a;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px -8px rgba(0, 0, 0, .6);
@@ -37,7 +37,7 @@
 :root[data-theme="dark"] {
     --bg: #1a1916; --paper: #23221f; --fg: #ece7dc; --muted: #a39d92; --faint: #6d6860; --line: #33312c; --chip: #2a2825; --hover: #201f1c;
     --hl-urgent: rgba(255, 104, 84, .42); --hl-soon: rgba(255, 170, 70, .36); --hl-normal: rgba(246, 226, 76, .32); --hl-later: rgba(96, 160, 245, .75);
-    --vignette: rgba(0, 0, 0, .35); --paper-dark: .16; --paper-light: none;
+    --vignette: rgba(0, 0, 0, .35); --paper-img: url("/paper-dark.jpg"); --paper-blend: screen;
     --accent: #7aa7dc; --urgent: #f0584d; --soon: #f0993a; --normal: #d9b400; --later: #6aa1f2; --done: #6fb26f;
     --wait: #ab93e8; --today: #4cc08a;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px -8px rgba(0, 0, 0, .6);
@@ -48,10 +48,9 @@
 :root.theming, :root.theming *, :root.theming ::before, :root.theming ::after { transition: background-color .35s var(--ease), color .35s var(--ease), border-color .35s var(--ease), box-shadow .35s var(--ease) !important; }
 * { box-sizing: border-box; }
 html { color-scheme: light dark; scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
-body { margin: 0; background: var(--bg) var(--paper-light, url("/paper.jpg")) center top / 700px 700px repeat; background-blend-mode: multiply; color: var(--fg); font-family: var(--serif); font-size: 18px; line-height: 1.45; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; caret-color: var(--accent); }
+body { margin: 0; background: var(--bg) var(--paper-img, url("/paper.jpg")) center top / 700px 700px repeat; background-blend-mode: var(--paper-blend, multiply); color: var(--fg); font-family: var(--serif); font-size: 18px; line-height: 1.45; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; caret-color: var(--accent); }
 /* the paper is a real texture tile (static/paper.jpg) multiplied with the theme colour; a faint vignette sits over everything, never in the way */
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 99; background: radial-gradient(ellipse 85% 75% at 50% 45%, transparent 55%, var(--vignette) 135%); }
-body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 98; background: url("/paper.jpg") center top / 700px 700px repeat; filter: invert(1) contrast(1.6); mix-blend-mode: screen; opacity: var(--paper-dark, 0); }
 /* dense UI — controls, chips, labels, keys, charts — reads in a sans; the words themselves stay in the serif */
 button, input, textarea, kbd, .chip, .wait, .when, .since, .path, .stat-label, .stat-note, .view-note, .help, .menu-list, .picker, .wait-picker, .section-picker, .cal-grid, .slots, .cal-head, table.history, .viz header p, .viz-table, .heat-legend, #tip, .past-summary, .past-ctl, .ins-foot, #toast { font-family: var(--sans); }
 .text, .note-text, .note-preview, .empty-state, .wait-input, .section-filter { font-family: var(--serif); }
@@ -65,7 +64,7 @@ button { cursor: pointer; }
 .ic { display: inline-block; width: 1rem; height: 1rem; background-color: currentColor; -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
 
 /* top bar: a translucent shelf the outline scrolls under */
-#top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: .7rem; padding: .55rem 1.25rem; background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: .7rem; padding: .55rem 1.25rem; background: color-mix(in srgb, var(--bg) 62%, transparent); -webkit-backdrop-filter: blur(18px) saturate(1.3); backdrop-filter: blur(18px) saturate(1.3); border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent); flex-wrap: wrap; }  /* frosted: what scrolls under it stays faintly visible */
 #tabs { position: relative; display: flex; gap: .1rem; background: var(--chip); border-radius: 999px; padding: .18rem; }
 #tabs .glider { position: absolute; top: .18rem; bottom: .18rem; left: 0; width: 0; border-radius: 999px; background: var(--paper); box-shadow: 0 1px 2px rgba(0, 0, 0, .10), 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); transition: transform .32s var(--ease), width .32s var(--ease); pointer-events: none; }
 #tabs.no-glide .glider { transition: none; }
@@ -76,6 +75,7 @@ button { cursor: pointer; }
 #tabs button.quiet { max-width: 0; padding-inline: 0; opacity: 0; overflow: hidden; margin-left: -.1rem; transition: max-width .32s var(--ease), padding .32s var(--ease), margin .32s var(--ease), opacity .18s var(--ease); }
 #tabs button.quiet.active { max-width: 8rem; padding-inline: .75rem; opacity: 1; margin-left: 0; }
 #tabs.no-glide button.quiet { transition: none; }
+#tabs button.quiet.measure { max-width: none; padding-inline: .75rem; transition: none; }
 #tabs button.active { color: var(--fg); font-weight: 600; }
 #tabs button b { font-weight: 600; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 #tabs button.active b { color: var(--accent); }
@@ -108,7 +108,9 @@ button { cursor: pointer; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--soon) 10%, transparent); } }
 
 /* outline */
-#view { max-width: 920px; margin: 0 auto; padding: 1.4rem 1.5rem 8rem; }
+#view { position: relative; max-width: 920px; margin: 0 auto; padding: 1.4rem 1.5rem 8rem; }
+#view > .ghost { position: absolute; inset: 0; overflow: hidden; pointer-events: none; will-change: transform, opacity; }
+#view > .page { will-change: transform, opacity; }
 .node > .kids { margin-left: 1.5rem; }
 .node.heading > .kids { margin-left: .4rem; }
 .row { display: flex; align-items: baseline; gap: .4rem; padding: .12rem .4rem; border-radius: var(--r-s); transition: background-color .15s var(--ease); }
