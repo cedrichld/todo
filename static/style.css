@@ -1,10 +1,10 @@
 :root {
   --bg: #fbfaf7; --fg: #1c1b19; --muted: #8a8680; --line: #e6e2da; --chip: #efece6;
   --accent: #3b6ea5; --urgent: #d92d20; --soon: #e8871e; --normal: #b8960a; --later: #3b82f6; --done: #5c9a5c;
-  --wait: #7c5cbf;
+  --wait: #7c5cbf; --today: #1f7a4d;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #17181a; --fg: #e8e6e1; --muted: #8b8f98; --line: #2c2f34; --chip: #26292e; --normal: #d9b400; --accent: #6ea0d8; --wait: #a98ee6; }
+  :root { --bg: #17181a; --fg: #e8e6e1; --muted: #8b8f98; --line: #2c2f34; --chip: #26292e; --normal: #d9b400; --accent: #6ea0d8; --wait: #a98ee6; --today: #4cc08a; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font-family: "EB Garamond", Garamond, "Times New Roman", serif; font-size: 17px; line-height: 1.45; }
@@ -49,7 +49,7 @@ button, input { font-family: inherit; }
 .chip { font-size: .72rem; background: var(--chip); border: none; border-radius: 999px; padding: .05rem .5rem; color: var(--muted); cursor: pointer; align-self: center; white-space: nowrap; flex: none; }
 .chip.empty { display: none; }  /* not just hidden: an empty button still joins baseline alignment and inflates the row */
 .row:hover .chip.empty, .row:focus-within .chip.empty { display: inline-block; }
-.chip.today { color: var(--fg); font-weight: 700; }
+.chip.today { color: var(--today); background: color-mix(in srgb, var(--today) 14%, transparent); font-weight: 700; }
 .chip.overdue { background: var(--urgent); color: #fff; }
 /* waiting on someone: hatched row + violet bar, still a normal todo */
 .node.waiting > .row { background-image: repeating-linear-gradient(135deg, transparent 0 8px, color-mix(in srgb, var(--wait) 9%, transparent) 8px 10px); box-shadow: inset 3px 0 0 var(--wait); }

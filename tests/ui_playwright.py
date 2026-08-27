@@ -72,7 +72,7 @@ async def main():
         n = tree()[new['id']]
         check('calendar sets today + morning', n['due_slot'] == 'morning' and n['due_date'], (n['due_date'], n['due_slot']))
         chip = await pg.locator(f'.node[data-id="{new["id"]}"] > .row > .chip').text_content()
-        check('chip shows day AM', chip.endswith(' AM'), chip)
+        check('chip shows Today · morning', chip == 'Today · morning', chip)
         await pg.screenshot(path=f'{SP}/ui-due.png')
         await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
         check('Escape closes popover', await pg.locator('#popover').is_hidden())

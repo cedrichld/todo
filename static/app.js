@@ -7,7 +7,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const pad2 = n => String(n).padStart(2, '0');
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const SLOT_LABEL = { morning: 'AM', afternoon: 'PM', evening: 'eve' };
+const SLOT_LABEL = { morning: 'morning', afternoon: 'afternoon', evening: 'evening' };
 const PRIO_LABEL = { urgent: 'Urgent', soon: 'Soon', normal: 'Normal', later: 'Later', none: 'None' };
 const PRIO_ORDER = { urgent: 0, soon: 1, normal: 2, later: 3, none: 4 };
 const PRIO_COLOR = { urgent: 'var(--urgent)', soon: 'var(--soon)', normal: 'var(--normal)', later: 'var(--later)' };
@@ -17,8 +17,8 @@ function parseISO(s) { const [y, m, d] = s.split('-').map(Number); return new Da
 function chipText(n) {
   if (!n.due_date) return '';
   const d = parseISO(n.due_date), diff = Math.round((d - parseISO(todayISO())) / 86400000);
-  let label = diff >= 0 && diff < 7 ? DAY[d.getDay()] : `${MON[d.getMonth()]} ${d.getDate()}`;
-  if (n.due_slot) label += ' ' + SLOT_LABEL[n.due_slot];
+  let label = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff > 1 && diff < 7 ? DAY[d.getDay()] : `${MON[d.getMonth()]} ${d.getDate()}`;
+  if (n.due_slot) label += ' · ' + SLOT_LABEL[n.due_slot];
   return label;
 }
 const isOverdue = n => !!n.due_date && !n.done_at && n.due_date < todayISO();
