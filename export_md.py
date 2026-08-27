@@ -11,13 +11,14 @@ def render(nodes):
         kids.sort(key=lambda n: (n['position'], n['id']))
     out = []
 
-    def walk(parent_id, hdepth, tdepth):
+    def walk(parent_id, depth, tdepth):
+        # depth = number of ancestors (sets heading size, like the page); tdepth = task nesting
         for n in by_parent.get(parent_id, []):
             if n['kind'] == 'heading':
                 if out:
                     out.append('')
-                out.append('#' * min(hdepth + 1, 3) + ' ' + n['text'])
-                walk(n['id'], hdepth + 1, 0)
+                out.append('#' * min(depth + 1, 3) + ' ' + n['text'])
+                walk(n['id'], depth + 1, 0)
             else:
                 box = '[x]' if n['done_at'] else '[ ]'
                 tags = []
@@ -33,7 +34,7 @@ def render(nodes):
                 if tags:
                     line += ' ' + ' '.join(tags)
                 out.append(line)
-                walk(n['id'], hdepth, tdepth + 1)
+                walk(n['id'], depth + 1, tdepth + 1)
 
     walk(None, 0, 0)
     return '\n'.join(out) + '\n'
