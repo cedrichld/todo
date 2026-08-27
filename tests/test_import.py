@@ -38,7 +38,9 @@ FIXTURE = f"""<html><body class="doc">
 <h2>{span('ML')}</h2>
 <ol class="lst-kix_e-0 start"><li>{span('Lab 5 (transformers)', '#cccccc', bold=True)}{span('&nbsp;— notes', '#cccccc')}</li></ol>
 <h2>{span('Classes:')}</h2>
-<ol class="lst-kix_f-1 start"><li>{span('Moveit ', '#6aa84f')}{span('✅', bold=True)}</li></ol>
+<ol class="lst-kix_f-1 start"><li>{span('Edouard Renard:')}</li></ol>
+<ol class="lst-kix_f-2 start"><li>{span('Moveit ', '#6aa84f')}{span('✅', bold=True)}</li><li>{span('Hardware', '#6aa84f')}{span('✅', bold=True)}</li></ol>
+<ol class="lst-kix_f-1"><li>{span('ROS2 redo')}</li></ol>
 <ol class="lst-kix_f-2 start"><li>{span('Add vision?', '#d60fd6', bold=True)}</li></ol>
 <p>{span('I need to now start the autograding, this is a long paragraph of prose.')}</p>
 </body></html>"""
@@ -100,9 +102,12 @@ class Convert(unittest.TestCase):
         self.assertEqual(self.parent_text(self.by_text('YTB Shorter')), 'Pratik')
         self.assertEqual(self.parent_text(self.by_text('Pratik')), 'Read paper')
 
-    def test_level_jump_without_parent_clamps_to_heading(self):
-        self.assertEqual(self.parent_text(self.by_text('Moveit')), 'Classes')
-        self.assertEqual(self.parent_text(self.by_text('Add vision?')), 'Moveit')
+    def test_list_starting_at_level_1_keeps_relative_nesting(self):
+        self.assertEqual(self.parent_text(self.by_text('Edouard Renard:')), 'Classes')
+        self.assertEqual(self.parent_text(self.by_text('Moveit')), 'Edouard Renard:')
+        self.assertEqual(self.parent_text(self.by_text('Hardware')), 'Edouard Renard:')
+        self.assertEqual(self.parent_text(self.by_text('ROS2 redo')), 'Classes')
+        self.assertEqual(self.parent_text(self.by_text('Add vision?')), 'ROS2 redo')
 
     def test_colors_map_to_priority_or_custom(self):
         self.assertEqual(self.by_text('Reach out to ppl')['priority'], 'urgent')

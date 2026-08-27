@@ -107,7 +107,7 @@ def convert(blocks, base_date):
     """Blocks -> (nodes, dropped). Each node: parent index, kind, text, priority, color, due, done."""
     nodes, dropped = [], []
     h1 = h2 = None
-    stack = []  # index of the last task at each list level
+    stack = {}  # raw list level -> index of the last task at that level
 
     def add(parent, kind, text, **kw):
         node = {'parent': parent, 'kind': kind, 'text': text, 'priority': 'none', 'color': None,
@@ -129,11 +129,11 @@ def convert(blocks, base_date):
                 h1, h2 = add(None, 'heading', text), None
             else:
                 h2 = add(h1, 'heading', text)
-            stack = []
+            stack = {}
         elif tag == 'p':
             if text.endswith(':') and len(text) < 40:
                 h2 = add(h1, 'heading', text.rstrip(':').strip())
-                stack = []
+                stack = {}
             else:
                 dropped.append(text)
         else:  # li
@@ -147,11 +147,14 @@ def convert(blocks, base_date):
             custom = None
             if color and priority == 'none' and color not in NEUTRAL_COLORS and not done:
                 custom = color
-            level = min(b['level'], len(stack))
-            parent = stack[level - 1] if level > 0 else (h2 if h2 is not None else h1)
+            raw = b['level']  # lists may start at level 1 with no level-0 item; keep nesting relative
+            for k in [k for k in stack if k >= raw]:
+                del stack[k]
+            lower = [k for k in stack if k < raw]
+            parent = stack[max(lower)] if lower else (h2 if h2 is not None else h1)
             idx = add(parent, 'task', text, priority=priority, color=custom,
                       due_date=due_date, due_slot=due_slot, done=done)
-            stack = stack[:level] + [idx]
+            stack[raw] = idx
     return nodes, dropped
 
 
