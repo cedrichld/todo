@@ -3,6 +3,11 @@ import os
 import tempfile
 
 
+def _note_lines(n, indent):
+    note = n.get('note')
+    return ['  ' * indent + ln for ln in note.split('\n')] if note else []
+
+
 def render(nodes):
     by_parent = {}
     for n in nodes:
@@ -18,6 +23,7 @@ def render(nodes):
                 if out:
                     out.append('')
                 out.append('#' * min(depth + 1, 3) + ' ' + n['text'])
+                out.extend(_note_lines(n, 0))
                 walk(n['id'], depth + 1, 0)
             else:
                 box = '[x]' if n['done_at'] else '[ ]'
@@ -37,6 +43,7 @@ def render(nodes):
                 if tags:
                     line += ' ' + ' '.join(tags)
                 out.append(line)
+                out.extend(_note_lines(n, tdepth + 1))
                 walk(n['id'], depth + 1, tdepth + 1)
 
     walk(None, 0, 0)

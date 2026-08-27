@@ -295,14 +295,48 @@ class Waiting(StoreTestCase):
             self.assertIn('- [ ] Reach out Jo (waiting on Sam since 2026-08-20)', f.read())
         old = os.path.join(self.dir, 'old.db')
         con = sqlite3.connect(old)
-        con.executescript(SCHEMA.replace('  waiting_on  TEXT,\n  waiting_since TEXT,\n', ''))
+        con.executescript(SCHEMA.replace('  waiting_on  TEXT,\n  waiting_since TEXT,\n  note        TEXT,\n', ''))
         con.execute("INSERT INTO nodes(parent_id, position, kind, text, created_at, updated_at) VALUES (NULL, 0, 'task', 'legacy', 't', 't')")
         con.commit(); con.close()
         s2 = Store(old)
         try:
             self.assertEqual(s2.update(1, waiting_on='Bob')['waiting_on'], 'Bob')
+            self.assertEqual(s2.update(1, note='details')['note'], 'details')
         finally:
             s2.close()
+
+
+class Notes(StoreTestCase):
+    """Free-text description on any item: kept verbatim, blank means none, edits coalesce like title edits."""
+
+    def setUp(self):
+        super().setUp()
+        self.h = self.s.create(kind='heading', text='H')
+        self.t = self.s.create(parent_id=self.h['id'], text='Email Bob')
+
+    def test_note_round_trips_and_logs_one_coalesced_row(self):
+        n = self.s.update(self.t['id'], note='bob@example.com\nask about the deadline')
+        self.assertEqual(n['note'], 'bob@example.com\nask about the deadline')
+        self.s.update(self.t['id'], note='bob@example.com\nask about the deadline and the budget')
+        rows = [r for r in self.chrono('edit') if r['field'] == 'note']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['old'], rows[0]['new']), ('', 'bob@example.com\nask about the deadline and the budget'))
+        self.assertEqual(rows[0]['snapshot'], 'Email Bob')
+
+    def test_blank_note_is_none_and_bad_values_rejected(self):
+        self.s.update(self.t['id'], note='x')
+        self.assertIsNone(self.s.update(self.t['id'], note='  \n ')['note'])
+        self.assertIsNone(self.s.update(self.t['id'], note=None)['note'])
+        with self.assertRaises(StoreError):
+            self.s.update(self.t['id'], note=5)
+        self.assertEqual(self.s.update(self.h['id'], note='section context')['note'], 'section context')
+
+    def test_mirror_indents_note_lines_under_the_item(self):
+        k = self.s.create(parent_id=self.t['id'], text='sub')
+        self.s.update(self.t['id'], note='line one\nline two')
+        self.s.update(self.h['id'], note='about H')
+        with open(self.md) as f:
+            self.assertEqual(f.read(), '# H\nabout H\n- [ ] Email Bob\n  line one\n  line two\n  - [ ] sub\n')
 
 
 class Mirror(StoreTestCase):

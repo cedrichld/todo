@@ -14,7 +14,7 @@ import export_md
 PRIORITIES = ('urgent', 'soon', 'normal', 'later', 'none')
 SLOTS = ('morning', 'afternoon', 'evening')
 KINDS = ('heading', 'task')
-EDITABLE = ('text', 'priority', 'color', 'due_date', 'due_slot', 'kind', 'collapsed', 'waiting_on', 'waiting_since')
+EDITABLE = ('text', 'priority', 'color', 'due_date', 'due_slot', 'kind', 'collapsed', 'waiting_on', 'waiting_since', 'note')
 TEXT_COALESCE_SECONDS = 120  # successive text edits within this window share one history row
 _UNSET = object()
 
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   done_at     TEXT,
   waiting_on  TEXT,
   waiting_since TEXT,
+  note        TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   archived_at TEXT
@@ -82,7 +83,7 @@ class Store:
     def _migrate(self):
         """Columns added after the first release; older databases get them on open."""
         cols = {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}
-        for col in ('waiting_on', 'waiting_since'):
+        for col in ('waiting_on', 'waiting_since', 'note'):
             if col not in cols:
                 self.conn.execute(f'ALTER TABLE nodes ADD COLUMN {col} TEXT')
         self.conn.commit()
@@ -150,17 +151,19 @@ class Store:
             'INSERT INTO history(node_id, ts, action, field, old, new, snapshot) VALUES (?,?,?,?,?,?,?)',
             (node_id, ts or now_iso(), action, field, old, new, snapshot))
 
-    def _log_text_edit(self, node_id, old, new, ts):
-        """Coalesce a burst of keystrokes into one history row."""
+    def _log_text_edit(self, node_id, old, new, ts, field='text', snapshot=None):
+        """Coalesce a burst of keystrokes (title or note) into one history row."""
+        if snapshot is None:
+            snapshot = new
         last = self.conn.execute(
             'SELECT * FROM history WHERE node_id=? ORDER BY id DESC LIMIT 1', (node_id,)).fetchone()
-        if last is not None and last['action'] == 'edit' and last['field'] == 'text':
+        if last is not None and last['action'] == 'edit' and last['field'] == field:
             age = (datetime.datetime.fromisoformat(ts) - datetime.datetime.fromisoformat(last['ts'])).total_seconds()
             if 0 <= age <= TEXT_COALESCE_SECONDS:
                 self.conn.execute('UPDATE history SET new=?, snapshot=?, ts=? WHERE id=?',
-                                  (new, new, ts, last['id']))
+                                  (new, snapshot, ts, last['id']))
                 return
-        self._log(node_id, 'edit', field='text', old=old, new=new, snapshot=new, ts=ts)
+        self._log(node_id, 'edit', field=field, old=old, new=new, snapshot=snapshot, ts=ts)
 
     def _validate(self, **f):
         if 'kind' in f and f['kind'] not in KINDS:
@@ -180,6 +183,8 @@ class Store:
             raise StoreError('text must be a string')
         if f.get('waiting_on') is not None and not isinstance(f['waiting_on'], str):
             raise StoreError('waiting_on must be a string')
+        if f.get('note') is not None and not isinstance(f['note'], str):
+            raise StoreError('note must be a string')
         if f.get('waiting_since') is not None:
             try:
                 datetime.datetime.fromisoformat(f['waiting_since'])
@@ -226,6 +231,8 @@ class Store:
                     v = 1 if v else 0
                 if k == 'waiting_on':
                     v = v.strip() or None if v else None
+                if k == 'note':
+                    v = v if v and v.strip() else None
                 if old[k] != v:
                     changes[k] = v
             if changes.get('waiting_on', old['waiting_on']) is None:
@@ -249,6 +256,8 @@ class Store:
                     continue
                 if k == 'text':
                     self._log_text_edit(node_id, old['text'], v, ts)
+                elif k == 'note':
+                    self._log_text_edit(node_id, _s(old['note']), _s(v), ts, field='note', snapshot=snapshot)
                 else:
                     self._log(node_id, 'edit', field='waiting' if k == 'waiting_on' else k,
                               old=_s(old[k]), new=_s(v), snapshot=snapshot, ts=ts)

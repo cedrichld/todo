@@ -8,7 +8,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font-family: "EB Garamond", Garamond, "Times New Roman", serif; font-size: 17px; line-height: 1.45; }
-button, input { font-family: inherit; }
+button, input, textarea { font-family: inherit; }
 
 /* top bar */
 #top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: .6rem; padding: .5rem 1rem; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -46,6 +46,20 @@ button, input { font-family: inherit; }
 .node[data-prio=normal] > .row > .text { color: var(--normal); font-weight: 600; }
 .node[data-prio=later]  > .row > .text { color: var(--later); }
 .node.done > .row > .text { color: var(--done) !important; text-decoration: line-through; font-weight: 400; opacity: .75; }
+/* notes: grey first line after the title; expands to an editor under the row */
+.note-preview { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86rem; color: var(--muted); cursor: pointer; padding: 0 .1rem; }
+.row:has(> .note-preview:not(.empty)) > .text { flex: 0 1 auto; }  /* the preview runs on from the title instead of hugging the right edge */
+.note-preview.empty { display: none; }
+.note-preview:hover { color: var(--fg); }
+.note-preview.open { font-size: .72rem; letter-spacing: .02em; }
+.note-preview.open::before { content: '▴ note'; }
+.node.done > .row > .note-preview { opacity: .6; }
+.note { margin: 0 0 .4rem 5.2rem; }
+.node.heading > .note { margin-left: 3rem; }
+.node.flat > .note { margin-left: 2.6rem; }
+.note-text { display: block; width: 100%; resize: none; overflow: hidden; border: none; border-left: 2px solid var(--line); border-radius: 0; background: transparent; color: var(--muted); font-size: .92rem; line-height: 1.4; padding: .1rem .6rem; outline: none; }
+.note-text:focus { border-left-color: var(--accent); color: var(--fg); }
+.note-text::placeholder { color: var(--muted); opacity: .55; }
 .chip { font-size: .72rem; background: var(--chip); border: none; border-radius: 999px; padding: .05rem .5rem; color: var(--muted); cursor: pointer; align-self: center; white-space: nowrap; flex: none; }
 .chip.empty { display: none; }  /* not just hidden: an empty button still joins baseline alignment and inflates the row */
 .row:hover .chip.empty, .row:focus-within .chip.empty { display: inline-block; }

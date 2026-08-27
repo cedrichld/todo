@@ -28,6 +28,8 @@ class Api(unittest.TestCase):
         self.assertEqual(self.call('PATCH', f"/api/nodes/{t['id']}", {'priority': 'soon'})['priority'], 'soon')
         self.assertTrue(self.call('PATCH', f"/api/nodes/{t['id']}", {'waiting_on': 'Sam'})['waiting_since'])
         self.assertIsNone(self.call('PATCH', f"/api/nodes/{t['id']}", {'waiting_on': None})['waiting_since'])
+        self.assertEqual(self.call('PATCH', f"/api/nodes/{t['id']}", {'note': 'a\nb'})['note'], 'a\nb')
+        self.assertIsNone(self.call('PATCH', f"/api/nodes/{t['id']}", {'note': ''})['note'])
         pair = self.call('POST', f"/api/nodes/{t['id']}/split", {'at': 5, 'text': 'hello there'})['nodes']
         self.assertEqual([n['text'] for n in pair], ['hello', ' there'])
         self.assertTrue(self.call('POST', f"/api/nodes/{t['id']}/done", {'done': True})['done_at'])

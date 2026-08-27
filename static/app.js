@@ -77,11 +77,12 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
+  noteOpen: new Set(),  // ids whose note editor is expanded (session-only, survives re-renders)
   nodes: new Map(), kids: new Map(), drag: null, query: '', current: null,
   view: localStorage.getItem('view') || 'all',
   hideDone: localStorage.getItem('hideDone') === '1',
 };
-function setNodes(list) { S.nodes = new Map(list.map(n => [n.id, n])); for (const n of S.nodes.values()) n._saved = n.text; index(); }
+function setNodes(list) { S.nodes = new Map(list.map(n => [n.id, n])); for (const n of S.nodes.values()) { n._saved = n.text; n._savedNote = n.note; } index(); }
 function index() {
   S.kids = new Map();
   for (const n of S.nodes.values()) { if (!S.kids.has(n.parent_id)) S.kids.set(n.parent_id, []); S.kids.get(n.parent_id).push(n); }
@@ -92,10 +93,11 @@ const nodeOf = el => { const x = el?.closest?.('.node'); return x ? S.nodes.get(
 function pathOf(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn) break; if (pn.kind === 'heading') out.unshift(pn.text); p = pn.parent_id; } return out; }
 function isDescendant(n, ancestor) { let p = n.parent_id; while (p != null) { if (p === ancestor.id) return true; p = S.nodes.get(p)?.parent_id; } return false; }
 function treeOrder() { const m = new Map(); let i = 0; (function walk(pid) { for (const n of kidsOf(pid)) { m.set(n.id, i++); walk(n.id); } })(null); return m; }
+const hasQ = (n, q) => n.text.toLowerCase().includes(q) || (n.note || '').toLowerCase().includes(q);
 function matchSet() {
   const q = S.query.trim().toLowerCase(); if (!q) return null;
   const set = new Set();
-  for (const n of S.nodes.values()) if (n.text.toLowerCase().includes(q)) { let cur = n; while (cur) { set.add(cur.id); cur = S.nodes.get(cur.parent_id); } }
+  for (const n of S.nodes.values()) if (hasQ(n, q)) { let cur = n; while (cur) { set.add(cur.id); cur = S.nodes.get(cur.parent_id); } }
   return set;
 }
 
@@ -124,9 +126,11 @@ function caretEdge(el) {
 // Where the caret is right now, in a form focusNode() can put back after a redraw.
 function keepFocus() {
   const active = document.activeElement;
+  if (active?.classList?.contains('note-text')) return { id: +active.closest('.node').dataset.id, note: active.selectionStart };
   return active?.classList?.contains('text') ? { id: +active.closest('.node').dataset.id, caret: caretOffset(active) } : null;
 }
 function focusNode(id, caret = 'end') {
+  if (caret != null && typeof caret === 'object' && 'note' in caret) return focusNote(id, caret.note);
   const t = $(`.node[data-id="${id}"] > .row > .text`);
   if (!t) return;
   setCaret(t, caret === 'end' ? t.textContent.length : caret);
@@ -146,8 +150,9 @@ function render() {
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
+  $$('#view .note-text').forEach(autosize);  // scrollHeight is only known once attached
   window.scrollTo(0, y);
-  if (keep) focusNode(keep.id, keep.caret);
+  if (keep) focusNode(keep.id, 'note' in keep ? { note: keep.note } : keep.caret);
 }
 function renderAll(main) {
   const match = matchSet();
@@ -181,6 +186,7 @@ function renderNode(n, depth, match, forceOpen, flat) {
     (isTask ? `<input type="checkbox" class="check" tabindex="-1" title="Done (Ctrl+Enter)">` : '') +
     (isTask ? `<button class="dot" tabindex="-1" title="Priority"></button>` : '') +
     `<span class="text" contenteditable="true" spellcheck="false"></span>` +
+    `<span class="note-preview" title="Show note (Ctrl+.)"></span>` +
     (isTask ? `<button class="chip" tabindex="-1" title="Due (Ctrl+D)"></button>` : '') +
     (isTask ? `<button class="wait" tabindex="-1"></button>` : '') +
     `<button class="menu" tabindex="-1" title="More">⋯</button>`;
@@ -188,8 +194,9 @@ function renderNode(n, depth, match, forceOpen, flat) {
   t.textContent = n.text;
   if (n.kind === 'heading') t.dataset.placeholder = 'Section';
   el.appendChild(row);
+  if (S.noteOpen.has(n.id)) el.appendChild(noteEditor(n));
   if (flat) {
-    const p = document.createElement('span'); p.className = 'path'; p.textContent = ''; // path shown by group header
+    el.classList.add('flat');
     $('.handle', row).remove(); $('.fold', row).remove();
   } else {
     const kids = document.createElement('div'); kids.className = 'kids';
@@ -206,6 +213,13 @@ function applyStyle(el, n) {
   el.classList.toggle('has-kids', kidsOf(n.id).length > 0);
   const t = $(':scope > .row > .text', el);
   t.style.color = n.color && !n.done_at ? n.color : '';
+  const pv = $(':scope > .row > .note-preview', el), open = S.noteOpen.has(n.id);
+  pv.textContent = open ? '' : (n.note || '').split('\n')[0];
+  pv.classList.toggle('empty', !n.note && !open);
+  pv.classList.toggle('open', open);
+  pv.title = open ? 'Hide note (Ctrl+. or Esc)' : 'Show note (Ctrl+.)';
+  const ed = $(':scope > .note > .note-text', el);
+  if (ed && document.activeElement !== ed && ed.value !== (n.note || '')) { ed.value = n.note || ''; autosize(ed); }
   const check = $(':scope > .row > .check', el); if (check) check.checked = !!n.done_at;
   const dot = $(':scope > .row > .dot', el);
   if (dot) { const c = n.color || PRIO_COLOR[n.priority] || ''; dot.style.background = c; dot.style.borderColor = c || ''; }
@@ -235,12 +249,66 @@ function setWaiting(n, who, since, label) {
   patchNodeDom(n);
   if (S.view !== 'all') render();
 }
+// Notes: free text under the title (emails, links, details). Collapsed to a grey first line; Ctrl+. or a click expands it.
+function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+function noteEditor(n) {
+  const box = document.createElement('div'); box.className = 'note';
+  const ta = document.createElement('textarea'); ta.className = 'note-text'; ta.rows = 1; ta.spellcheck = false;
+  ta.placeholder = 'Notes — emails, links, details you don’t want to keep in your head';
+  ta.value = n.note || '';
+  box.appendChild(ta);
+  return box;
+}
+function focusNote(id, at = 'end') {
+  const ta = $(`.node[data-id="${id}"] > .note > .note-text`); if (!ta) return;
+  ta.focus(); const p = at === 'end' ? ta.value.length : at; ta.setSelectionRange(p, p); ta.scrollIntoView({ block: 'nearest' });
+}
+function toggleNote(n, focus = true) {
+  const el = $(`.node[data-id="${n.id}"]`); if (!el) return;
+  if (S.noteOpen.has(n.id)) {
+    flushNote(n.id); S.noteOpen.delete(n.id);
+    $(':scope > .note', el)?.remove();
+    applyStyle(el, n);
+    if (focus) focusNode(n.id, 'end');
+    return;
+  }
+  S.noteOpen.add(n.id);
+  const ed = noteEditor(n); el.insertBefore(ed, $(':scope > .row', el).nextSibling);
+  autosize(ed.firstChild); applyStyle(el, n);
+  if (focus) focusNote(n.id);
+}
+const noteTimers = new Map();
+function onNoteInput(ta) {
+  const n = nodeOf(ta); if (!n) return;
+  n.note = ta.value || null; autosize(ta);
+  clearTimeout(noteTimers.get(n.id));
+  noteTimers.set(n.id, setTimeout(() => flushNote(n.id), 300));
+}
+function flushNote(id) {
+  if (!noteTimers.has(id)) return;
+  clearTimeout(noteTimers.get(id)); noteTimers.delete(id);
+  const n = S.nodes.get(id); if (!n) return;
+  const note = n.note || null;
+  if (note === (n._savedNote || null)) return;
+  pushTextUndo(id, n._savedNote || '', note || '', 'note'); n._savedNote = note;
+  queue.run(() => api.patch(id, { note })).catch(showError);
+}
+function flushAll() { for (const id of [...textTimers.keys()]) flushText(id); for (const id of [...noteTimers.keys()]) flushNote(id); }
+function onNoteKey(e, ta, n) {
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (e.key === 'Escape' || (ctrl && e.key === '.')) { e.preventDefault(); closePopover(); return toggleNote(n, true); }
+  if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
+  if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
+  if (ctrl && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }
+}
 function patchNodeDom(n) { const el = $(`.node[data-id="${n.id}"]`); if (el) applyStyle(el, n); }
 
 // ---------------------------------------------------------------- text editing + saving
 const textTimers = new Map();
 function onInput(e) {
-  const t = e.target; if (!t.classList?.contains('text')) return;
+  const t = e.target;
+  if (t.classList?.contains('note-text')) return onNoteInput(t);
+  if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
   n.text = t.textContent;
   clearTimeout(textTimers.get(n.id));
@@ -263,7 +331,7 @@ function onPaste(e) {
 }
 // A structural change: flush pending text, run the write, refetch the tree, re-render, focus.
 async function structural(fn, focus) {
-  for (const id of [...textTimers.keys()]) flushText(id);
+  flushAll();
   let res;
   try { res = await queue.run(fn); } catch (e) { showError(e); return null; }
   await refresh(typeof focus === 'function' ? focus(res) : focus);
@@ -290,10 +358,10 @@ function pushUndo(entry) {
   if (undoState.stack.length > undoState.max) undoState.stack.shift();
   undoState.redo.length = 0;
 }
-function pushTextUndo(id, oldText, newText) {
+function pushTextUndo(id, oldText, newText, field = 'text') {
   const top = undoState.stack.at(-1);
-  if (top && top.type === 'text' && top.id === id && !undoState.redo.length && Date.now() - top.t < 2500) { top.new = newText; top.t = Date.now(); return; }
-  pushUndo({ type: 'text', id, old: oldText, new: newText, label: 'typing' });
+  if (top && top.type === 'text' && top.field === field && top.id === id && !undoState.redo.length && Date.now() - top.t < 2500) { top.new = newText; top.t = Date.now(); return; }
+  pushUndo({ type: 'text', field, id, old: oldText, new: newText, label: field === 'note' ? 'note' : 'typing' });
 }
 async function restoreAt(id, parent_id, after_id) {
   const p = rid(parent_id), a = rid(after_id);
@@ -303,7 +371,11 @@ async function restoreAt(id, parent_id, after_id) {
 async function applyEntry(e, dir) {
   const id = rid(e.id);
   switch (e.type) {
-    case 'text': await api.patch(id, { text: dir === 'undo' ? e.old : e.new }); return { id, caret: 'end' };
+    case 'text': {
+      const v = dir === 'undo' ? e.old : e.new;
+      if (e.field === 'note') { await api.patch(id, { note: v || null }); S.noteOpen.add(id); return { id, caret: { note: 'end' } }; }
+      await api.patch(id, { text: v }); return { id, caret: 'end' };
+    }
     case 'patch': {
       const vals = dir === 'undo' ? e.old : e.new, fields = {};
       for (const k of Object.keys(vals)) if (k !== 'done_at') fields[k] = vals[k];
@@ -332,7 +404,7 @@ async function applyEntry(e, dir) {
   return null;
 }
 async function runUndo(dir) {
-  for (const id of [...textTimers.keys()]) flushText(id);
+  flushAll();
   const from = dir === 'undo' ? undoState.stack : undoState.redo, to = dir === 'undo' ? undoState.redo : undoState.stack;
   const e = from.pop();
   if (!e) return toast(dir === 'undo' ? 'Nothing to undo' : 'Nothing to redo');
@@ -454,7 +526,9 @@ function newRoot() {
 // ---------------------------------------------------------------- keyboard
 const currentNode = () => S.current != null ? S.nodes.get(S.current) : null;
 function onKey(e) {
-  const t = e.target; if (!t.classList?.contains('text')) return;
+  const t = e.target;
+  if (t.classList?.contains('note-text')) { const n = nodeOf(t); if (n) { S.current = n.id; onNoteKey(e, t, n); } return; }
+  if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
   S.current = n.id;
   const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
@@ -467,6 +541,7 @@ function onKey(e) {
   if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); return openPopover($(':scope > .row > .chip', t.closest('.node')) || t, duePicker(n)); }
   if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); if (n.kind === 'task') openPopover($(':scope > .row > .wait', t.closest('.node')) || t, waitPicker(n)); return; }
   if (ctrl && e.shiftKey && e.key.toLowerCase() === 'h') { e.preventDefault(); return toggleKind(n, caret()); }
+  if (ctrl && e.key === '.') { e.preventDefault(); closePopover(); return toggleNote(n, true); }
   if (ctrl && e.key === '/') { e.preventDefault(); return openPopover($(':scope > .row > .menu', t.closest('.node')) || t, sectionPicker(n)); }
   if (!outline) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); return enterAt(n, t); }
@@ -616,6 +691,7 @@ function nodeMenu(n) {
     ['Move up', 'Alt+↑', () => moveVert(n, -1, caret())],
     ['Move down', 'Alt+↓', () => moveVert(n, 1, caret())],
     null,
+    [n.note ? (S.noteOpen.has(n.id) ? 'Hide note' : 'Show note') : 'Add note', 'Ctrl+.', () => toggleNote(n, true)],
     [n.kind === 'task' ? 'Make heading' : 'Make task', 'Ctrl+Shift+H', () => toggleKind(n, caret())],
     n.kind === 'task' ? [n.done_at ? 'Mark not done' : 'Mark done', 'Ctrl+Enter', () => toggleDone(n)] : null,
     n.kind === 'task' ? [n.waiting_on ? `Waiting on ${n.waiting_on}…` : 'Waiting on…', 'Ctrl+B', () => openPopover(anchor() || document.body, waitPicker(n)), true] : null,
@@ -643,6 +719,7 @@ function helpPanel() {
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
     ['Ctrl+Shift+1 2 3 4', 'Urgent / Soon / Normal / Later'], ['Ctrl+Shift+0', 'No priority'],
     ['Ctrl+D', 'Due date'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
+    ['Ctrl+.', 'Notes on the item (emails, links, details); Esc hides them again'],
     ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
     ['Ctrl+K', 'Search'], ['Esc', 'Close / unfocus'],
   ];
@@ -652,6 +729,8 @@ function helpPanel() {
 
 // ---------------------------------------------------------------- mouse: clicks + drag
 function onClick(e) {
+  const pv = e.target.closest('.note-preview');
+  if (pv && $('#view').contains(pv)) { const n = nodeOf(pv); if (n) { S.current = n.id; toggleNote(n, true); } return; }
   const btn = e.target.closest('button, .check');
   if (!btn || !$('#view').contains(btn)) return;
   const nodeEl = btn.closest('.node'); if (!nodeEl) return;
@@ -700,7 +779,7 @@ function renderToday(main) {
   const t = todayISO(), q = S.query.trim().toLowerCase(), order = treeOrder();
   const items = [...S.nodes.values()]
     .filter(n => n.kind === 'task' && !n.done_at && ((n.due_date && n.due_date <= t) || n.priority === 'urgent'))
-    .filter(n => !q || n.text.toLowerCase().includes(q))
+    .filter(n => !q || hasQ(n, q))
     .sort((a, b) => order.get(a.id) - order.get(b.id));
   if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing due today and nothing urgent.</p>'; return; }
   const groups = new Map();
@@ -716,7 +795,7 @@ function renderWaiting(main) {
   const q = S.query.trim().toLowerCase();
   const items = [...S.nodes.values()]
     .filter(n => n.kind === 'task' && n.waiting_on && !n.done_at)
-    .filter(n => !q || n.text.toLowerCase().includes(q) || n.waiting_on.toLowerCase().includes(q))
+    .filter(n => !q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))
     .sort((a, b) => (a.waiting_since || '').localeCompare(b.waiting_since || ''));
   if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
   const h = document.createElement('h2'); h.className = 'group'; h.textContent = `${items.length} waiting · oldest first`; main.appendChild(h);
@@ -766,7 +845,8 @@ async function renderHistory(main) {
     tr.children[0].textContent = fmtTime(r.ts);
     tr.children[1].textContent = r.action;
     tr.children[2].textContent = r.snapshot;
-    tr.children[3].textContent = r.action === 'edit' ? `${r.field}: ${r.old || '∅'} → ${r.new || '∅'}` : '';
+    const clip = v => (v || '∅').replace(/\s+/g, ' ').slice(0, 140);
+    tr.children[3].textContent = r.action === 'edit' ? `${r.field}: ${clip(r.old)} → ${clip(r.new)}` : '';
     table.appendChild(tr);
   }
   main.appendChild(table);
@@ -783,7 +863,7 @@ function boot() {
   view.addEventListener('change', onChange);
   view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el) S.current = +el.dataset.id; });
   view.addEventListener('mousedown', e => { const el = e.target.closest?.('.node'); if (el) S.current = +el.dataset.id; });
-  view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); });
+  view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); if (e.target.classList?.contains('note-text')) flushNote(+e.target.closest('.node').dataset.id); });
   view.addEventListener('beforeinput', e => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); runUndo(e.inputType === 'historyUndo' ? 'undo' : 'redo'); } });
   view.addEventListener('dragstart', onDragStart);
   view.addEventListener('dragover', onDragOver);
@@ -799,7 +879,7 @@ function boot() {
   search.onkeydown = e => { if (e.key === 'Escape') { search.value = ''; S.query = ''; render(); search.blur(); } };
   document.addEventListener('keydown', onGlobalKey);
   document.addEventListener('mousedown', e => { const pop = $('#popover'); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.dot, .chip, .menu, #help-btn')) closePopover(); });
-  window.addEventListener('beforeunload', () => { for (const id of [...textTimers.keys()]) flushText(id); });
+  window.addEventListener('beforeunload', flushAll);
   refresh();
 }
 boot();
