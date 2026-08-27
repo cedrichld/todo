@@ -109,7 +109,6 @@ button { cursor: pointer; }
 
 /* outline */
 #view { position: relative; max-width: 920px; margin: 0 auto; padding: 1.4rem 1.5rem 8rem; }
-.ghost { position: absolute; z-index: 4; box-sizing: border-box; overflow: hidden; pointer-events: none; will-change: transform, opacity; }
 #view > .page { will-change: transform, opacity; }
 .node > .kids { margin-left: 1.5rem; }
 .node.heading > .kids { margin-left: .4rem; }

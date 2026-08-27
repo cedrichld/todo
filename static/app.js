@@ -1084,24 +1084,14 @@ function setView(v) {
   // The old page becomes a ghost that slips a touch towards where we came from and fades, while the new page
   // arrives from the other side — both at once, on the compositor, so nothing waits and nothing repaints.
   $('#tabs').classList.remove('no-glide');
-  const y1 = window.scrollY, r = main.getBoundingClientRect(); S.scroll[S.view] = y1;
-  $$('.ghost').forEach(g => g.remove());
-  // The old page is lifted out into a ghost laid exactly over the view (outside #view, which render() wipes),
-  // above the new page and below the top bar: it dissolves and slips a touch, and the new page is underneath.
-  const ghost = document.createElement('div'); ghost.className = 'ghost';
-  Object.assign(ghost.style, { left: (r.left + window.scrollX) + 'px', top: (r.top + y1) + 'px', width: r.width + 'px', height: r.height + 'px', padding: getComputedStyle(main).padding });
-  const held = document.createElement('div');
-  while (main.firstChild) held.appendChild(main.firstChild);
-  ghost.appendChild(held); document.body.appendChild(ghost);
-  const ease = 'cubic-bezier(.2,.7,.2,1)';
-  ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-8 * dir}px)` }], { duration: 170, easing: ease, fill: 'forwards' }).finished.then(() => ghost.remove(), () => ghost.remove());
+  S.scroll[S.view] = window.scrollY;
+  // the old page is cut at once; only the new one eases in, from the side we are heading to
   S.view = v; render();
   window.scrollTo(0, S.scroll[v] || 0);
-  held.style.transform = `translateY(${window.scrollY - y1}px)`;  // keep the old page exactly where it was on screen
   const page = document.createElement('div'); page.className = 'page';
   while (main.firstChild) page.appendChild(main.firstChild);
   main.appendChild(page);
-  page.animate([{ opacity: 0, transform: `translateX(${6 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 200, easing: ease });
+  page.animate([{ opacity: 0, transform: `translateX(${6 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'cubic-bezier(.2,.7,.2,1)' });
 }
 // content that arrives later (Done, Insights) fades in instead of popping
 function arrive(main) { if (REDUCED.matches || !main.animate) return; const el = $('.page', main) || main; el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' }); }
