@@ -531,8 +531,12 @@ function toggleDone(n) {
   pushUndo(entry);
   queue.run(() => api.done(n.id, done)).then(r => {
     const { changed, ...node } = r; Object.assign(n, node); patchNodeDom(n); entry.changed = changed;
-    // sub-tasks / parent tasks followed along: redraw from the server's tree
-    if (changed.length > 1) return refresh(keepFocus());
+    // sub-tasks / parent tasks followed along: patch them in place so their rows animate too (a redraw would cut it short)
+    if (changed.length > 1) {
+      if (S.view !== 'all' || S.hideDone) return refresh(keepFocus());
+      for (const id of changed) { const c = S.nodes.get(id); if (c && c.id !== n.id) { c.done_at = done ? n.done_at : null; patchNodeDom(c); } }
+      tabCounts(); return;
+    }
     if (S.hideDone || S.view !== 'all') render();
   }).catch(showError);
 }
@@ -719,7 +723,7 @@ function onKey(e) {
 function onGlobalKey(e) {
   if (e.defaultPrevented) return;
   const ctrl = e.ctrlKey || e.metaKey, ae = document.activeElement, tag = ae?.tagName;
-  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || ae?.isContentEditable;
+  const typing = (tag === 'INPUT' && ae.type !== 'checkbox') || tag === 'TEXTAREA' || ae?.isContentEditable;  // a focused checkbox is not a place you type
   if (ctrl && e.key.toLowerCase() === 'k') { e.preventDefault(); const s = $('#search'); s.focus(); s.select(); return; }
   if (e.altKey && e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); const vs = VIEWS.filter(v => v !== 'history' || S.view === 'history'), i = vs.indexOf(S.view); return setView(vs[(i + (e.key === 'ArrowRight' ? 1 : vs.length - 1)) % vs.length]); }
   if (e.key === 'Escape') { closePopover(); clearSelection(); return; }

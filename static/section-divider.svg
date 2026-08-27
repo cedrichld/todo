@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 32" preserveAspectRatio="none" role="img" aria-label="Subtle hand-drawn section divider">
+  <path
+    d="M2 16.4 C48 15.8 86 16.8 132 16.1 S218 15.5 270 16.3 S360 17.0 410 16.2 S501 15.6 550 16.1 S644 16.8 694 16.0 S785 15.5 836 16.2 S930 16.9 980 16.1 S1072 15.7 1198 16.3"
+    fill="none"
+    stroke="#625e58"
+    stroke-opacity="0.18"
+    stroke-width="1.15"
+    stroke-linecap="round"
+    vector-effect="non-scaling-stroke"
+  />
+</svg>
