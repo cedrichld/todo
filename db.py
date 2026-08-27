@@ -258,20 +258,59 @@ class Store:
             self._place(node_id, n['parent_id'], sibs[-1] if sibs else None)
             self._log(node_id, 'restore', ts=ts)
 
+    def _live_kids(self, node_id):
+        return self.conn.execute('SELECT * FROM nodes WHERE parent_id=? AND archived_at IS NULL ORDER BY position, id',
+                                 (node_id,)).fetchall()
+
+    def _flip_done(self, node_id, done, ts, changed):
+        self.conn.execute('UPDATE nodes SET done_at=?, updated_at=? WHERE id=?', (ts if done else None, ts, node_id))
+        self._log(node_id, 'done' if done else 'undone', ts=ts)
+        if not done:
+            self._unarchive_chain(node_id, ts)
+        changed.append(node_id)
+
     def set_done(self, node_id, done):
+        """Mark a task done / not done. A task with sub-tasks is done exactly when all of them are:
+        the change flows down to its sub-tasks and up through its task ancestors (a section
+        heading stops it). The returned node carries `changed`: every id whose state flipped."""
         with self._tx():
             n = self.get(node_id)
             if n['kind'] != 'task':
                 raise StoreError('only tasks can be done')
-            if bool(n['done_at']) == bool(done):
-                return n
-            ts = now_iso()
-            self.conn.execute('UPDATE nodes SET done_at=?, updated_at=? WHERE id=?',
-                              (ts if done else None, ts, node_id))
-            self._log(node_id, 'done' if done else 'undone', ts=ts)
-            if not done:
-                self._unarchive_chain(node_id, ts)
-        return self.get(node_id)
+            done, ts, changed = bool(done), now_iso(), []
+            if bool(n['done_at']) != done:
+                self._flip_done(node_id, done, ts, changed)
+
+            def down(nid):
+                for k in self._live_kids(nid):
+                    if k['kind'] == 'task' and bool(k['done_at']) != done:
+                        self._flip_done(k['id'], done, ts, changed)
+                    down(k['id'])
+            down(node_id)
+            p = n['parent_id']
+            while p is not None:
+                pn = self.get(p)
+                if pn['kind'] != 'task':
+                    break
+                subs = [k for k in self._live_kids(p) if k['kind'] == 'task']
+                if subs:
+                    want = all(k['done_at'] for k in subs)
+                    if bool(pn['done_at']) != want:
+                        self._flip_done(p, want, ts, changed)
+                p = pn['parent_id']
+        out = self.get(node_id)
+        out['changed'] = changed
+        return out
+
+    def set_done_many(self, ids, done):
+        """Set exactly these tasks done / not done, with no propagation (used by undo). Returns the ids that flipped."""
+        with self._tx():
+            done, ts, changed = bool(done), now_iso(), []
+            for nid in ids:
+                n = self.get(nid)
+                if n['kind'] == 'task' and bool(n['done_at']) != done:
+                    self._flip_done(nid, done, ts, changed)
+        return changed
 
     def split(self, node_id, at, text=None, parent_id=_UNSET, after_id=_UNSET):
         """Cut node text at `at`; the tail becomes a new task. `text` overrides the stored text."""

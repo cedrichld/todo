@@ -228,6 +228,23 @@ async def main():
         check('Ctrl+/ opens the section picker', await pg.locator('#popover .section-picker').is_visible())
         await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
         check('Escape closes it', await pg.locator('#popover').is_hidden())
+        # --- sub-tasks complete their parent, and the other way round
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .check').click(); await pg.wait_for_timeout(400)  # re-open it
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .text').click(); await pg.keyboard.press('Tab'); await pg.wait_for_timeout(500)
+        check('nested under first', tree()[second['id']]['parent_id'] == first['id'])
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .check').click(); await pg.wait_for_timeout(600)
+        tr = tree(); check('checking the only sub-task completes the parent', bool(tr[first['id']]['done_at']) and bool(tr[second['id']]['done_at']))
+        check('parent row drawn as done', 'done' in (await pg.locator(f'.node[data-id="{first["id"]}"]').get_attribute('class')))
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(600)
+        tr = tree(); check('Ctrl+Z reopens both', not tr[first['id']]['done_at'] and not tr[second['id']]['done_at'])
+        await pg.locator(f'.node[data-id="{first["id"]}"] > .row > .check').click(); await pg.wait_for_timeout(600)
+        tr = tree(); check('checking the parent completes its sub-task', bool(tr[first['id']]['done_at']) and bool(tr[second['id']]['done_at']))
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .check').click(); await pg.wait_for_timeout(600)
+        tr = tree(); check('re-opening the sub-task re-opens the parent', not tr[first['id']]['done_at'] and not tr[second['id']]['done_at'])
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(600)
+        tr = tree(); check('Ctrl+Z puts both back to done', bool(tr[first['id']]['done_at']) and bool(tr[second['id']]['done_at']))
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(600)
+        tr = tree(); check('another Ctrl+Z reopens both again', not tr[first['id']]['done_at'] and not tr[second['id']]['done_at'])
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))

@@ -44,6 +44,7 @@ ROUTES = [
         int(m.group(1)),
         parent_id=_int_or_none(b['parent_id']) if 'parent_id' in b else _UNSET,
         after_id=_int_or_none(b['after_id']) if 'after_id' in b else _UNSET)),
+    ('POST', r'/api/done-batch$', lambda s, m, q, b: {'ids': s.set_done_many([int(i) for i in b.get('ids', [])], bool(b.get('done', True)))}),
     ('POST', r'/api/archive-done$', lambda s, m, q, b: (lambda ids: {'archived': len(ids), 'ids': ids})(s.archive_done(b.get('before')))),
     ('GET', r'/api/done$', lambda s, m, q, b: {'days': s.done_log(q.get('from'), q.get('to'))}),
     ('GET', r'/api/history$', lambda s, m, q, b: {'rows': s.history(q.get('q', ''), int(q.get('limit', 300)))}),

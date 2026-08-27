@@ -42,6 +42,7 @@ const api = {
   create: b => api.req('POST', '/api/nodes', b),
   patch: (id, b) => api.req('PATCH', `/api/nodes/${id}`, b),
   done: (id, done) => api.req('POST', `/api/nodes/${id}/done`, { done }),
+  doneBatch: (ids, done) => api.req('POST', '/api/done-batch', { ids, done }),
   move: (id, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/move`, { parent_id, after_id }),
   split: (id, at, text, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/split`, { at, text, parent_id, after_id }),
   del: (id, hard) => api.req('DELETE', `/api/nodes/${id}${hard ? '?hard=1' : ''}`),
@@ -120,6 +121,11 @@ function caretEdge(el) {
   const box = el.getBoundingClientRect(), lh = rect.height || 20;
   return { first: rect.top < box.top + lh * 0.6, last: rect.bottom > box.bottom - lh * 0.6 };
 }
+// Where the caret is right now, in a form focusNode() can put back after a redraw.
+function keepFocus() {
+  const active = document.activeElement;
+  return active?.classList?.contains('text') ? { id: +active.closest('.node').dataset.id, caret: caretOffset(active) } : null;
+}
 function focusNode(id, caret = 'end') {
   const t = $(`.node[data-id="${id}"] > .row > .text`);
   if (!t) return;
@@ -135,7 +141,7 @@ function neighborId(id, dir) {
 // ---------------------------------------------------------------- rendering
 function render() {
   const active = document.activeElement;
-  const keep = active?.classList?.contains('text') ? { id: +active.closest('.node').dataset.id, caret: caretOffset(active) } : null;
+  const keep = keepFocus();
   const y = window.scrollY;
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
@@ -286,7 +292,7 @@ async function applyEntry(e, dir) {
       if ('done_at' in vals) await api.done(id, !!vals.done_at);
       return { id, caret: 'end' };
     }
-    case 'done': await api.done(id, dir === 'undo' ? !e.done : e.done); return { id, caret: 'end' };
+    case 'done': await api.doneBatch((e.changed || [e.id]).map(rid), dir === 'undo' ? !e.done : e.done); return { id, caret: 'end' };
     case 'move': { const to = dir === 'undo' ? e.from : e.to; await api.move(id, rid(to.parent_id), rid(to.after_id)); return { id, caret: 'end' }; }
     case 'create':
       if (dir === 'undo') { await api.del(id, true); return e.parent_id != null ? { id: rid(e.parent_id), caret: 'end' } : null; }
@@ -333,8 +339,14 @@ function toggleDone(n) {
   if (n.kind !== 'task') return;
   const done = !n.done_at;
   n.done_at = done ? new Date().toISOString() : null; patchNodeDom(n);
-  pushUndo({ type: 'done', id: n.id, done, label: done ? 'done' : 'not done' });
-  queue.run(() => api.done(n.id, done)).then(r => { Object.assign(n, r); patchNodeDom(n); if (S.hideDone || S.view !== 'all') render(); }).catch(showError);
+  const entry = { type: 'done', id: n.id, done, changed: [n.id], label: done ? 'done' : 'not done' };
+  pushUndo(entry);
+  queue.run(() => api.done(n.id, done)).then(r => {
+    const { changed, ...node } = r; Object.assign(n, node); patchNodeDom(n); entry.changed = changed;
+    // sub-tasks / parent tasks followed along: redraw from the server's tree
+    if (changed.length > 1) return refresh(keepFocus());
+    if (S.hideDone || S.view !== 'all') render();
+  }).catch(showError);
 }
 function setPriority(n, p) { if (n.kind !== 'task') return; patchFields(n, { priority: p, color: null }, 'priority').catch(showError); patchNodeDom(n); }
 function setColor(n, hex) { patchFields(n, { color: hex }, 'color').catch(showError); patchNodeDom(n); }

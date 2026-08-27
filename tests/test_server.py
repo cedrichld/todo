@@ -29,6 +29,8 @@ class Api(unittest.TestCase):
         pair = self.call('POST', f"/api/nodes/{t['id']}/split", {'at': 5, 'text': 'hello there'})['nodes']
         self.assertEqual([n['text'] for n in pair], ['hello', ' there'])
         self.assertTrue(self.call('POST', f"/api/nodes/{t['id']}/done", {'done': True})['done_at'])
+        self.assertEqual(self.call('POST', '/api/done-batch', {'ids': [t['id']], 'done': False}), {'ids': [t['id']]})
+        self.assertTrue(self.call('POST', f"/api/nodes/{t['id']}/done", {'done': True})['changed'], [t['id']])
         moved = self.call('POST', f"/api/nodes/{pair[1]['id']}/move", {'parent_id': h['id'], 'after_id': None})
         self.assertEqual(moved['position'], 0)
         self.assertEqual(self.call('DELETE', f"/api/nodes/{pair[1]['id']}")['hard'], False)

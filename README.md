@@ -26,7 +26,7 @@ Tests: `python3 -m unittest discover -s tests -v`
 | Ctrl+/ | move to section… (type to filter, Enter picks) |
 | Ctrl+Z / Ctrl+Y | undo / redo (Ctrl+Shift+Z also redoes) |
 | ↑ / ↓ | previous / next item |
-| Ctrl+Enter | done / not done |
+| Ctrl+Enter | done / not done (a task with sub-tasks is done exactly when all of them are: checking the last sub-task completes it, re-opening one re-opens it, checking the parent checks them all) |
 | Ctrl+Shift+1 / 2 / 3 / 4 | urgent (red) / soon (orange) / normal (yellow) / later (blue) |
 | Ctrl+Shift+0 | no priority |
 | Ctrl+D | due date (calendar + morning / afternoon / evening) |

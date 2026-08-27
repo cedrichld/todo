@@ -193,6 +193,67 @@ class Structure(StoreTestCase):
         self.assertEqual([n['text'] for n in self.s.tree()], ['H', 'a'])
 
 
+class DoneFlow(StoreTestCase):
+    """A task with sub-tasks is done exactly when all of them are."""
+
+    def setUp(self):
+        super().setUp()
+        self.h = self.s.create(kind='heading', text='H')
+        self.p = self.s.create(parent_id=self.h['id'], text='parent')
+        self.x = self.s.create(parent_id=self.p['id'], text='x')
+        self.y = self.s.create(parent_id=self.p['id'], text='y')
+
+    def done(self, n):
+        return bool(self.s.get(n['id'])['done_at'])
+
+    def test_last_sub_task_completes_the_parent(self):
+        r = self.s.set_done(self.x['id'], True)
+        self.assertEqual(r['changed'], [self.x['id']])
+        self.assertFalse(self.done(self.p))
+        r = self.s.set_done(self.y['id'], True)
+        self.assertEqual(r['changed'], [self.y['id'], self.p['id']])
+        self.assertTrue(self.done(self.p))
+        self.assertEqual(self.chrono('done')[-1]['node_id'], self.p['id'])
+
+    def test_reopening_a_sub_task_reopens_the_parent(self):
+        self.s.set_done(self.x['id'], True); self.s.set_done(self.y['id'], True)
+        r = self.s.set_done(self.y['id'], False)
+        self.assertEqual(r['changed'], [self.y['id'], self.p['id']])
+        self.assertFalse(self.done(self.p)); self.assertTrue(self.done(self.x))
+
+    def test_parent_toggle_applies_to_sub_tasks(self):
+        self.s.set_done(self.x['id'], True)
+        r = self.s.set_done(self.p['id'], True)
+        self.assertEqual(r['changed'], [self.p['id'], self.y['id']])  # x was already done
+        self.assertTrue(self.done(self.x) and self.done(self.y))
+        r = self.s.set_done(self.p['id'], False)
+        self.assertEqual(sorted(r['changed']), sorted([self.p['id'], self.x['id'], self.y['id']]))
+        self.assertFalse(self.done(self.x) or self.done(self.y))
+
+    def test_flows_through_grandchildren_and_stops_at_headings(self):
+        g = self.s.create(parent_id=self.x['id'], text='g')
+        self.s.set_done(self.y['id'], True)
+        r = self.s.set_done(g['id'], True)
+        self.assertEqual(r['changed'], [g['id'], self.x['id'], self.p['id']])
+        self.assertIsNone(self.s.get(self.h['id'])['done_at'])
+        self.s.set_done(self.p['id'], False)
+        self.assertFalse(self.done(g))
+
+    def test_archived_sub_tasks_do_not_count(self):
+        self.s.set_done(self.x['id'], True)
+        self.s.delete(self.x['id'])  # archived; y is the only live sub-task
+        self.s.set_done(self.y['id'], True)
+        self.assertTrue(self.done(self.p))
+
+    def test_set_done_many_is_exact(self):
+        self.s.set_done(self.x['id'], True)
+        self.assertEqual(self.s.set_done_many([self.p['id'], self.y['id']], True), [self.p['id'], self.y['id']])
+        self.assertEqual(self.s.set_done_many([self.p['id'], self.y['id']], False), [self.p['id'], self.y['id']])
+        self.assertTrue(self.done(self.x)); self.assertFalse(self.done(self.p))
+        with self.assertRaises(StoreError):
+            self.s.set_done(self.h['id'], True)
+
+
 class Mirror(StoreTestCase):
     def test_markdown_mirror_regenerated_on_every_write(self):
         h = self.s.create(kind='heading', text='H')
