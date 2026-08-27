@@ -149,10 +149,21 @@ function render() {
   const y = window.scrollY;
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
+  tabCounts();
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
   $$('#view .note-text').forEach(autosize);  // scrollHeight is only known once attached
   window.scrollTo(0, y);
   if (keep) focusNode(keep.id, 'note' in keep ? { note: keep.note } : keep.caret);
+}
+function tabCounts() {
+  const t = todayISO(); let today = 0, waiting = 0;
+  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if ((n.due_date && n.due_date <= t) || n.priority === 'urgent') today++; if (n.waiting_on) waiting++; }
+  for (const b of $$('#tabs button')) {
+    const c = { today, waiting }[b.dataset.view]; let badge = $('b', b);
+    if (!c) { badge?.remove(); continue; }
+    if (!badge) { badge = document.createElement('b'); b.appendChild(badge); }
+    badge.textContent = c;
+  }
 }
 function renderAll(main) {
   const match = matchSet();
@@ -161,7 +172,7 @@ function renderAll(main) {
   tree.appendChild(renderChildren(null, 0, match, !!match));
   main.appendChild(tree);
   if (!S.nodes.size) { const p = document.createElement('p'); p.className = 'empty-state'; p.textContent = 'Empty list. Add a section to start.'; main.appendChild(p); }
-  const add = document.createElement('button'); add.id = 'add-root'; add.textContent = '+ New section';
+  const add = document.createElement('button'); add.id = 'add-root'; add.textContent = 'New section';
   add.onclick = () => { const last = kidsOf(null).at(-1); structural(() => api.create({ parent_id: null, after_id: last ? last.id : null, kind: 'heading', text: '' }), r => ({ id: r.id, caret: 0 })); };
   main.appendChild(add);
 }
@@ -181,15 +192,15 @@ function renderNode(n, depth, match, forceOpen, flat) {
   const isTask = n.kind === 'task';
   const row = document.createElement('div'); row.className = 'row';
   row.innerHTML =
-    `<span class="handle" draggable="true" title="Drag to reorder">⋮⋮</span>` +
-    `<button class="fold" tabindex="-1" title="Fold">▾</button>` +
+    `<span class="handle" draggable="true" title="Drag to reorder"></span>` +
+    `<button class="fold" tabindex="-1" title="Fold"></button>` +
     (isTask ? `<input type="checkbox" class="check" tabindex="-1" title="Done (Ctrl+Enter)">` : '') +
     (isTask ? `<button class="dot" tabindex="-1" title="Priority"></button>` : '') +
     `<span class="text" contenteditable="true" spellcheck="false"></span>` +
     `<span class="note-preview" title="Show note (Ctrl+.)"></span>` +
     (isTask ? `<button class="chip" tabindex="-1" title="Due (Ctrl+D)"></button>` : '') +
     (isTask ? `<button class="wait" tabindex="-1"></button>` : '') +
-    `<button class="menu" tabindex="-1" title="More">⋯</button>`;
+    `<button class="menu" tabindex="-1" title="More"></button>`;
   const t = $('.text', row);
   t.textContent = n.text;
   if (n.kind === 'heading') t.dataset.placeholder = 'Section';
@@ -234,7 +245,7 @@ function applyStyle(el, n) {
   el.classList.toggle('waiting', waiting);
   const w = $(':scope > .row > .wait', el);
   if (w) {
-    w.textContent = waiting ? `⏳ ${n.waiting_on} · ${waitAge(n)}` : '+ waiting';
+    w.textContent = waiting ? `${n.waiting_on} · ${waitAge(n)}` : '+ waiting';
     w.classList.toggle('empty', !waiting);
     w.classList.toggle('stale', waiting && daysWaiting(n) >= WAIT_STALE_DAYS);
     w.title = waiting ? `Waiting on ${n.waiting_on} since ${n.waiting_since ? fmtDay(n.waiting_since.slice(0, 10)) : '?'} — click to bump or clear (Ctrl+B)` : 'Waiting on someone / something (Ctrl+B)';
@@ -715,7 +726,7 @@ function helpPanel() {
   const rows = [
     ['Enter', 'New item below (splits at cursor)'], ['Backspace on empty', 'Delete item'],
     ['Tab / Shift+Tab', 'Nest under the item above / un-nest'], ['Alt+↑ / Alt+↓', 'Move up / down (hops into the next section at the edge)'],
-    ['Ctrl+/', 'Move to another section'], ['Drag ⋮⋮', 'Reorder; drop on a section title to move into it'],
+    ['Ctrl+/', 'Move to another section'], ['Drag the grip', 'Reorder; drop on a section title to move into it'],
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
     ['Ctrl+Shift+1 2 3 4', 'Urgent / Soon / Normal / Later'], ['Ctrl+Shift+0', 'No priority'],
     ['Ctrl+D', 'Due date'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
