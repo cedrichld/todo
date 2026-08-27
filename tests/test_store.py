@@ -376,6 +376,9 @@ class Queries(StoreTestCase):
         self.assertEqual([len(d['items']) for d in days], [1, 1])
         self.assertEqual(days[1]['day'], '2026-08-20')
         self.assertEqual(days[1]['items'][0]['path'], ['H'])
+        ids = [n['id'] for n in self.s.done_tree()]
+        self.assertEqual(sorted(ids), sorted([h['id'], a['id'], b['id']]))  # archived done tasks come with their (archived) section
+        self.assertEqual({n['id']: bool(n['archived_at']) for n in self.s.done_tree()}, {h['id']: False, a['id']: True, b['id']: True})
         self.assertEqual(self.s.done_log(date_from='2026-08-21'), days[:1])
         self.assertEqual(self.s.done_log(date_to='2026-08-20'), days[1:])
 

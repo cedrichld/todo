@@ -492,6 +492,19 @@ class Store:
             days[-1]['items'].append(n)
         return days
 
+    def done_tree(self):
+        """Every done task plus each of its ancestors (archived or not), as tree nodes."""
+        out = {}
+        for r in self.conn.execute("SELECT * FROM nodes WHERE done_at IS NOT NULL AND kind='task'"):
+            n = dict(r)
+            out[n['id']] = n
+            pid = n['parent_id']
+            while pid is not None:
+                p = out.get(pid) or self.get(pid)
+                out[pid] = p
+                pid = p['parent_id']
+        return sorted(out.values(), key=lambda n: (n['parent_id'] or 0, n['position'], n['id']))
+
     def search(self, q):
         rows = self.conn.execute(
             'SELECT * FROM nodes WHERE archived_at IS NULL AND text LIKE ? '

@@ -48,7 +48,7 @@ const api = {
   del: (id, hard) => api.req('DELETE', `/api/nodes/${id}${hard ? '?hard=1' : ''}`),
   restore: (id, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/restore`, parent_id === undefined ? {} : { parent_id, after_id }),
   archiveDone: () => api.req('POST', '/api/archive-done', {}),
-  doneLog: () => api.req('GET', '/api/done'),
+  doneTree: () => api.req('GET', '/api/done-tree'),
   history: q => api.req('GET', `/api/history?q=${encodeURIComponent(q)}`),
 };
 
@@ -89,8 +89,8 @@ function index() {
   for (const a of S.kids.values()) a.sort((x, y) => x.position - y.position || x.id - y.id);
 }
 const kidsOf = id => S.kids.get(id) || [];
-const nodeOf = el => { const x = el?.closest?.('.node'); return x ? S.nodes.get(+x.dataset.id) : null; };
-function taskPath(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn || pn.kind !== 'task') break; out.unshift(pn.text); p = pn.parent_id; } return out; }  // parent tasks up to the section
+const getNode = id => S.nodes.get(id) || S.extra?.get(id);  // S.extra: archived nodes shown by the Done view
+const nodeOf = el => { const x = el?.closest?.('.node'); return x ? getNode(+x.dataset.id) : null; };
 function pathOf(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn) break; if (pn.kind === 'heading') out.unshift(pn.text); p = pn.parent_id; } return out; }
 function isDescendant(n, ancestor) { let p = n.parent_id; while (p != null) { if (p === ancestor.id) return true; p = S.nodes.get(p)?.parent_id; } return false; }
 function treeOrder() { const m = new Map(); let i = 0; (function walk(pid) { for (const n of kidsOf(pid)) { m.set(n.id, i++); walk(n.id); } })(null); return m; }
@@ -196,6 +196,8 @@ function render() {
   const y = window.scrollY;
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
+  main.classList.toggle('filtered', S.view !== 'all');
+  if (S.view !== 'done') S.extra = null;
   tabCounts();
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
   if (S.current != null) $(`.node[data-id="${S.current}"]`)?.classList.add('current');
@@ -226,7 +228,7 @@ function renderAll(main) {
 function renderChildren(pid, depth, match, forceOpen) {
   const frag = document.createDocumentFragment();
   for (const n of kidsOf(pid)) {
-    if (S.hideDone && n.done_at) continue;
+    if (S.hideDone && S.view === 'all' && n.done_at) continue;
     if (match && !match.has(n.id)) continue;
     frag.appendChild(renderNode(n, depth, match, forceOpen, false));
   }
@@ -598,7 +600,7 @@ function newRoot() {
 }
 
 // ---------------------------------------------------------------- keyboard
-const currentNode = () => S.current != null ? S.nodes.get(S.current) : null;
+const currentNode = () => S.current != null ? getNode(S.current) : null;
 function setCurrent(id) {
   if (S.current !== id) { $('.node.current')?.classList.remove('current'); $(`.node[data-id="${id}"]`)?.classList.add('current'); }
   S.current = id;
@@ -857,74 +859,52 @@ function onDrop(e) {
 function onDragEnd() { S.drag = null; clearDropMarks(); $$('.node.dragging').forEach(el => el.classList.remove('dragging')); }
 
 // ---------------------------------------------------------------- views
-// Today and Waiting list tasks under the section they live in, so the heading says where each item comes from.
-function sectionHeading(path) {
-  const h = document.createElement('h2'); h.className = 'group';
-  if (!path.length) { h.textContent = 'Top level'; h.classList.add('top'); return h; }
-  const crumbs = document.createElement('span'); crumbs.className = 'crumbs'; crumbs.textContent = path.slice(0, -1).map(p => p + ' › ').join('');
-  h.appendChild(crumbs); h.appendChild(document.createTextNode(path.at(-1)));
-  return h;
+// Today, Waiting and Done are the same outline as All, pruned to the matching tasks and whatever leads to them.
+function withAncestors(ids, nodes) {
+  const keep = new Set();
+  for (const id of ids) { let cur = nodes.get(id); while (cur && !keep.has(cur.id)) { keep.add(cur.id); cur = nodes.get(cur.parent_id); } }
+  return keep;
 }
-function renderGrouped(main, items, sortWithin) {
-  const order = treeOrder(), groups = new Map();
-  for (const n of items.sort((a, b) => order.get(a.id) - order.get(b.id))) {
-    const path = pathOf(n), key = path.join('\u0000');
-    if (!groups.has(key)) groups.set(key, { path, list: [] });
-    groups.get(key).list.push(n);
-  }
-  for (const { path, list } of groups.values()) {
-    main.appendChild(sectionHeading(path));
-    list.sort(sortWithin);
-    for (const n of list) {
-      const el = renderNode(n, 0, null, false, true), parents = taskPath(n);
-      if (parents.length) { const c = document.createElement('span'); c.className = 'crumb'; c.textContent = parents.join(' › ') + ' ›'; $(':scope > .row', el).insertBefore(c, $(':scope > .row > .text', el)); }
-      main.appendChild(el);
-    }
-  }
+function renderOutline(main, hits, extra) {
+  const nodes = extra ? new Map([...extra, ...S.nodes]) : S.nodes, keep = withAncestors(hits, nodes), saved = [S.nodes, S.kids];
+  if (extra) { S.nodes = nodes; index(); }
+  const tree = document.createElement('div'); tree.id = 'tree';
+  try { tree.appendChild(renderChildren(null, 0, keep, true)); } finally { [S.nodes, S.kids] = saved; }
+  main.appendChild(tree);
+  const hit = new Set(hits);
+  for (const el of $$('.node.task', tree)) if (!hit.has(+el.dataset.id)) el.classList.add('ctx');  // a parent shown only for context
 }
 function renderToday(main) {
   main.innerHTML = '';
   const t = todayISO(), q = S.query.trim().toLowerCase();
-  const items = [...S.nodes.values()]
-    .filter(n => n.kind === 'task' && !n.done_at && ((n.due_date && n.due_date <= t) || n.priority === 'urgent'))
-    .filter(n => !q || hasQ(n, q));
-  if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing due today and nothing urgent.</p>'; return; }
-  renderGrouped(main, items, (a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999') || PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority]);
+  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at && ((n.due_date && n.due_date <= t) || n.priority === 'urgent') && (!q || hasQ(n, q))).map(n => n.id);
+  if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing due today and nothing urgent.</p>'; return; }
+  renderOutline(main, hits);
 }
 function renderWaiting(main) {
   main.innerHTML = '';
   const q = S.query.trim().toLowerCase();
-  const items = [...S.nodes.values()]
-    .filter(n => n.kind === 'task' && n.waiting_on && !n.done_at)
-    .filter(n => !q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q));
-  if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
-  const p = document.createElement('p'); p.className = 'view-note'; p.textContent = `${items.length} waiting · oldest first within each section`; main.appendChild(p);
-  renderGrouped(main, items, (a, b) => (a.waiting_since || '').localeCompare(b.waiting_since || ''));
+  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && n.waiting_on && !n.done_at && (!q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))).map(n => n.id);
+  if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
+  renderOutline(main, hits);
 }
 async function renderDone(main) {
   main.innerHTML = '<p class="empty-state">Loading…</p>';
-  let days;
-  try { days = (await api.doneLog()).days; } catch (e) { showError(e); return; }
+  let nodes;
+  try { nodes = (await api.doneTree()).nodes; } catch (e) { showError(e); return; }
   if (S.view !== 'done') return;
   main.innerHTML = '';
-  const q = S.query.trim().toLowerCase();
-  let any = false;
-  for (const day of days) {
-    const items = day.items.filter(n => !q || n.text.toLowerCase().includes(q));
-    if (!items.length) continue;
-    any = true;
-    const h = document.createElement('h2'); h.className = 'group'; h.textContent = `${fmtDay(day.day)} · ${items.length}`; main.appendChild(h);
-    for (const n of items) {
-      const row = document.createElement('div'); row.className = 'log-row';
-      row.innerHTML = `<input type="checkbox" checked title="Mark not done"><span class="crumb"></span><span class="log-text"></span><span class="log-time"></span>`;
-      setText($('.log-text', row), n.text);
-      $('.crumb', row).textContent = n.path.length ? n.path.join(' › ') + ' ›' : '';
-      $('.log-time', row).textContent = n.done_at.slice(11, 16);
-      $('input', row).onchange = () => queue.run(() => api.done(n.id, false)).then(() => refresh()).catch(showError);
-      main.appendChild(row);
-    }
+  const q = S.query.trim().toLowerCase(), extra = new Map(nodes.map(n => [n.id, n]));
+  S.extra = extra;
+  const hits = nodes.filter(n => n.kind === 'task' && n.done_at && (!q || hasQ(n, q))).map(n => n.id);
+  if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing done yet.</p>'; return; }
+  renderOutline(main, hits, extra);
+  for (const el of $$('.node.done', main)) {
+    const n = extra.get(+el.dataset.id); if (!n?.done_at) continue;
+    const w = document.createElement('span'); w.className = 'when'; w.textContent = fmtTime(n.done_at); w.title = 'Done ' + fmtTime(n.done_at);
+    $(':scope > .row', el).insertBefore(w, $(':scope > .row > .menu', el));
+    if (n.archived_at) el.classList.add('archived');
   }
-  if (!any) main.innerHTML = '<p class="empty-state">Nothing done yet.</p>';
 }
 async function renderHistory(main) {
   main.innerHTML = '<p class="empty-state">Loading…</p>';
