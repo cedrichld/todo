@@ -26,7 +26,7 @@ def _int_or_none(v):
 
 
 ROUTES = [
-    ('GET', r'/api/tree$', lambda s, m, q, b: {'nodes': s.tree()}),
+    ('GET', r'/api/tree$', lambda s, m, q, b: (s.sweep_due(), {'nodes': s.tree()})[1]),  # the sweep tags newly due tasks red
     ('GET', r'/api/done-tree$', lambda s, m, q, b: {'nodes': s.done_tree()}),
     ('POST', r'/api/nodes$', lambda s, m, q, b: s.create(
         parent_id=_int_or_none(b.get('parent_id')),

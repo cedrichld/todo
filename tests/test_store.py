@@ -1,3 +1,4 @@
+import datetime
 import os
 import sqlite3
 import shutil
@@ -295,13 +296,14 @@ class Waiting(StoreTestCase):
             self.assertIn('- [ ] Reach out Jo (waiting on Sam since 2026-08-20)', f.read())
         old = os.path.join(self.dir, 'old.db')
         con = sqlite3.connect(old)
-        con.executescript(SCHEMA.replace('  waiting_on  TEXT,\n  waiting_since TEXT,\n  note        TEXT,\n', ''))
+        con.executescript(SCHEMA.replace('  waiting_on  TEXT,\n  waiting_since TEXT,\n  note        TEXT,\n  auto_urgent TEXT,\n', ''))
         con.execute("INSERT INTO nodes(parent_id, position, kind, text, created_at, updated_at) VALUES (NULL, 0, 'task', 'legacy', 't', 't')")
         con.commit(); con.close()
         s2 = Store(old)
         try:
             self.assertEqual(s2.update(1, waiting_on='Bob')['waiting_on'], 'Bob')
             self.assertEqual(s2.update(1, note='details')['note'], 'details')
+            self.assertEqual(s2.update(1, due_date=datetime.date.today().isoformat())['priority'], 'urgent')
         finally:
             s2.close()
 
@@ -435,3 +437,51 @@ class Undo(StoreTestCase):
         self.s.delete(self.b['id'])
         self.s.restore(self.b['id'])
         self.assertEqual(self.texts(self.b['id']), [])
+
+
+class DueSoon(StoreTestCase):
+    """Due today / tomorrow / overdue → red, once per due date; the user's own colour afterwards sticks."""
+
+    def setUp(self):
+        super().setUp()
+        self.h = self.s.create(kind='heading', text='H')
+        self.t = self.s.create(parent_id=self.h['id'], text='Autograder', priority='later')
+        self.today = datetime.date.today()
+
+    def d(self, days):
+        return (self.today + datetime.timedelta(days=days)).isoformat()
+
+    def test_due_tomorrow_turns_red_and_is_logged(self):
+        n = self.s.update(self.t['id'], due_date=self.d(1), due_slot='morning')
+        self.assertEqual((n['priority'], n['auto_urgent']), ('urgent', self.d(1)))
+        self.assertIn('urgent (due soon)', [r['new'] for r in self.chrono('edit')])
+        far = self.s.update(self.t['id'], due_date=self.d(5))
+        self.assertEqual(far['priority'], 'urgent')  # nothing resets a colour silently
+        self.assertEqual(self.s.update(self.t['id'], priority='later')['priority'], 'later')
+        self.assertEqual(self.s.update(self.t['id'], due_date=self.d(0))['priority'], 'urgent')  # a new due date tags again
+
+    def test_override_sticks_through_updates_and_sweeps(self):
+        self.s.update(self.t['id'], due_date=self.d(0))
+        self.s.update(self.t['id'], priority='normal')
+        self.s.update(self.t['id'], text='Autograder v2')
+        self.assertEqual(self.s.sweep_due(), [])
+        self.assertEqual(self.s.get(self.t['id'])['priority'], 'normal')
+        self.assertEqual(self.s.update(self.t['id'], color='#123456')['priority'], 'normal')
+
+    def test_sweep_tags_dates_that_rolled_in_and_skips_done(self):
+        u = self.s.create(parent_id=self.h['id'], text='untouched')
+        self.s.conn.execute('UPDATE nodes SET due_date=? WHERE id=?', (self.d(1), self.t['id']))
+        self.s.conn.execute('UPDATE nodes SET due_date=? WHERE id=?', (self.d(-3), u['id']))
+        self.s.conn.commit()
+        self.s.set_done(u['id'], True)
+        self.assertEqual(self.s.sweep_due(), [self.t['id']])
+        self.assertEqual(self.s.get(self.t['id'])['priority'], 'urgent')
+        self.assertEqual(self.s.get(u['id'])['priority'], 'none')
+        self.assertEqual(self.s.sweep_due(), [])
+
+    def test_choosing_a_colour_first_counts_as_the_decision(self):
+        self.s.conn.execute('UPDATE nodes SET due_date=? WHERE id=?', (self.d(0), self.t['id'])); self.s.conn.commit()
+        n = self.s.update(self.t['id'], priority='soon', color=None)
+        self.assertEqual((n['priority'], n['auto_urgent']), ('soon', self.d(0)))
+        self.assertEqual(self.s.sweep_due(), [])
+        self.assertIsNone(self.s.update(self.t['id'], due_date=None)['auto_urgent'])

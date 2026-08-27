@@ -29,6 +29,8 @@ class Api(unittest.TestCase):
         self.assertTrue(self.call('PATCH', f"/api/nodes/{t['id']}", {'waiting_on': 'Sam'})['waiting_since'])
         self.assertIsNone(self.call('PATCH', f"/api/nodes/{t['id']}", {'waiting_on': None})['waiting_since'])
         self.assertEqual(self.call('PATCH', f"/api/nodes/{t['id']}", {'note': 'a\nb'})['note'], 'a\nb')
+        import datetime as _dt
+        self.assertEqual(self.call('PATCH', f"/api/nodes/{t['id']}", {'due_date': _dt.date.today().isoformat()})['priority'], 'urgent')
         self.assertIsNone(self.call('PATCH', f"/api/nodes/{t['id']}", {'note': ''})['note'])
         pair = self.call('POST', f"/api/nodes/{t['id']}/split", {'at': 5, 'text': 'hello there'})['nodes']
         self.assertEqual([n['text'] for n in pair], ['hello', ' there'])

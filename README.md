@@ -29,7 +29,7 @@ Tests: `python3 -m unittest discover -s tests -v`
 | Ctrl+Enter | done / not done (a task with sub-tasks is done exactly when all of them are: checking the last sub-task completes it, re-opening one re-opens it, checking the parent checks them all) |
 | Ctrl+Shift+1 / 2 / 3 / 4 | urgent (red) / soon (orange) / normal (yellow) / later (blue) |
 | Ctrl+Shift+0 | no priority |
-| Ctrl+D | due date (calendar + morning / afternoon / evening) |
+| Ctrl+D | due date (calendar + morning / afternoon / evening). A task due today or tomorrow (or overdue) turns red on its own — once per due date, so a colour you pick afterwards sticks |
 | Alt+Shift+← / → | previous / next tab |
 | Shift+click, Ctrl+click, Shift+↑/↓ | select several rows; Enter marks them done / not done, Delete archives them, dragging one handle moves them all — one Ctrl+Z reverses the whole batch |
 | Delete | remove the selected item — click its row (not the words) first; Ctrl+Shift+Backspace does the same while typing in it. Items with text are archived, so Ctrl+Z brings them back |

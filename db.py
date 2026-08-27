@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   waiting_on  TEXT,
   waiting_since TEXT,
   note        TEXT,
+  auto_urgent TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   archived_at TEXT
@@ -66,6 +67,14 @@ def _s(v):
     return '' if v is None else str(v)
 
 
+def _due_soon(n, today=None):
+    """Open task due today, tomorrow, or already overdue."""
+    if n['kind'] != 'task' or n['done_at'] or not n['due_date']:
+        return False
+    today = today or datetime.date.today()
+    return datetime.date.fromisoformat(n['due_date']) <= today + datetime.timedelta(days=1)
+
+
 class StoreError(ValueError):
     """Bad input from a caller (maps to HTTP 400)."""
 
@@ -83,7 +92,7 @@ class Store:
     def _migrate(self):
         """Columns added after the first release; older databases get them on open."""
         cols = {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}
-        for col in ('waiting_on', 'waiting_since', 'note'):
+        for col in ('waiting_on', 'waiting_since', 'note', 'auto_urgent'):
             if col not in cols:
                 self.conn.execute(f'ALTER TABLE nodes ADD COLUMN {col} TEXT')
         self.conn.commit()
@@ -241,18 +250,38 @@ class Store:
                 changes['waiting_since'] = ts
             if changes.get('waiting_since') == old['waiting_since']:
                 del changes['waiting_since']
-            auto = set()  # fields cleared as a side effect of becoming a heading; not logged
+            auto = set()  # fields changed as a side effect (becoming a heading, coming due); logged differently or not at all
             if changes.get('kind') == 'heading':
                 for k, v in (('priority', 'none'), ('due_date', None), ('due_slot', None), ('done_at', None),
                              ('waiting_on', None), ('waiting_since', None)):
                     if old[k] != v:
                         changes[k] = v
                         auto.add(k)
+            # Coming due today or tomorrow (or overdue) tags the task red once per due date; a colour the user
+            # picks afterwards sticks, and picking one first counts as the user's decision for that date.
+            new = {**old, **changes}
+            due_auto = False
+            if new['kind'] == 'task' and _due_soon(new) and new.get('auto_urgent') != new['due_date']:
+                changes['auto_urgent'] = new['due_date']
+                if 'priority' not in fields and 'color' not in fields:
+                    if old['priority'] != 'urgent':
+                        changes['priority'] = 'urgent'
+                        auto.add('priority')
+                        due_auto = True
+                    if old['color'] is not None:
+                        changes['color'] = None
+                        auto.add('color')
+            elif new['due_date'] is None and old.get('auto_urgent'):
+                changes['auto_urgent'] = None
             if not changes:
                 return old
             snapshot = changes.get('text', old['text'])
             for k, v in changes.items():
-                if k in ('collapsed', 'done_at', 'due_date', 'due_slot', 'waiting_since') or k in auto:
+                if k in ('collapsed', 'done_at', 'due_date', 'due_slot', 'waiting_since', 'auto_urgent'):
+                    continue
+                if k in auto:
+                    if k == 'priority' and due_auto:
+                        self._log(node_id, 'edit', field='priority', old=_s(old[k]), new='urgent (due soon)', snapshot=snapshot, ts=ts)
                     continue
                 if k == 'text':
                     self._log_text_edit(node_id, old['text'], v, ts)
@@ -491,6 +520,17 @@ class Store:
                 days.append({'day': day, 'items': []})
             days[-1]['items'].append(n)
         return days
+
+    def sweep_due(self, today=None):
+        """Tag tasks whose due date has rolled into today/tomorrow (once per due date). Returns their ids."""
+        today = today or datetime.date.today()
+        limit = (today + datetime.timedelta(days=1)).isoformat()
+        rows = self.conn.execute(
+            "SELECT id, due_date FROM nodes WHERE kind='task' AND archived_at IS NULL AND done_at IS NULL "
+            "AND due_date IS NOT NULL AND due_date <= ? AND (auto_urgent IS NULL OR auto_urgent != due_date)", (limit,)).fetchall()
+        for r in rows:
+            self.update(r['id'], due_date=r['due_date'])
+        return [r['id'] for r in rows]
 
     def done_tree(self):
         """Every done task plus each of its ancestors (archived or not), as tree nodes."""

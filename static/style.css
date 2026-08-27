@@ -1,7 +1,7 @@
 /* Todo — warm paper, EB Garamond, colour only where it means something. */
 :root {
   --bg: #faf8f3; --paper: #fffefb; --fg: #1c1b19; --muted: #6e6a63; --faint: #a8a49c; --line: #e5e0d6; --chip: #efebe3; --hover: #f2eee6;
-  --accent: #35679c; --urgent: #c8261b; --soon: #b85f08; --normal: #957908; --later: #2f6fd1; --done: #4f8f4f;
+  --accent: #35679c; --urgent: #c8261b; --soon: #e5801a; --normal: #d3a212; --later: #2f6fd1; --done: #4f8f4f;
   --wait: #6f4fb3; --today: #1f7a4d;
   --r-s: 5px; --r-m: 8px; --r-l: 12px;
   --shadow: 0 1px 2px rgba(28, 27, 25, .06), 0 10px 30px -10px rgba(28, 27, 25, .25);
@@ -211,6 +211,12 @@ kbd { font-family: inherit; font-size: .75rem; color: var(--muted); background: 
 .help td { padding: .12rem .7rem .12rem 0; }
 
 /* views */
+.view-switch { display: inline-flex; gap: .1rem; background: var(--chip); border-radius: 999px; padding: .15rem; margin: .1rem 0 .7rem .4rem; }
+.view-switch button { display: flex; align-items: baseline; gap: .3rem; background: none; border: none; font-size: .88rem; color: var(--muted); padding: .12rem .7rem; border-radius: 999px; transition: color .15s var(--ease), background-color .15s var(--ease), box-shadow .15s var(--ease); }
+.view-switch button:hover { color: var(--fg); }
+.view-switch button.on { color: var(--fg); font-weight: 600; background: var(--paper); box-shadow: 0 1px 2px rgba(0, 0, 0, .10), 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); }
+.view-switch button b { font-weight: 600; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.view-switch button.on b { color: var(--accent); }
 /* filtered views (Today, Waiting, Done): the same outline, no reordering, parents shown only as context are dimmed */
 #view.filtered .handle, #view.filtered .fold { display: none; }
 .node.ctx > .row > .text, .node.ctx > .row > .dot { opacity: .5; }

@@ -77,6 +77,7 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
+  todayMode: 'due',  // Today tab: 'due' (default) or 'rest' — everything open that is not due
   sel: new Set(), selAnchor: null,  // multi-selection of rows (ids) and the end it grows from
   noteOpen: new Set(),  // ids whose note editor is expanded (session-only, survives re-renders)
   nodes: new Map(), kids: new Map(), drag: null, query: '', current: null,
@@ -507,8 +508,13 @@ function patchFields(n, fields, label) {
   for (const k of Object.keys(fields)) { old[k] = n[k]; nu[k] = fields[k]; }
   if (fields.kind === 'heading') { for (const k of ['priority', 'due_date', 'due_slot', 'done_at']) old[k] = n[k]; Object.assign(n, { priority: 'none', due_date: null, due_slot: null, done_at: null }); }
   Object.assign(n, fields);
-  pushUndo({ type: 'patch', id: n.id, old, new: nu, label });
-  return queue.run(() => api.patch(n.id, fields));
+  const entry = { type: 'patch', id: n.id, old, new: nu, label };
+  pushUndo(entry);
+  return queue.run(() => api.patch(n.id, fields)).then(r => {
+    // the store may tag a task red because it came due: show it, and fold it into the same undo step
+    for (const k of ['priority', 'color', 'auto_urgent']) if (r[k] !== n[k]) { if (!(k in entry.old)) entry.old[k] = n[k]; entry.new[k] = r[k]; n[k] = r[k]; }
+    patchNodeDom(n); return r;
+  });
 }
 function toggleDone(n) {
   if (n.kind !== 'task') return;
@@ -959,8 +965,19 @@ function renderOutline(main, hits, extra) {
 function renderToday(main) {
   main.innerHTML = '';
   const t = todayISO(), q = S.query.trim().toLowerCase();
-  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at && ((n.due_date && n.due_date <= t) || n.priority === 'urgent') && (!q || hasQ(n, q))).map(n => n.id);
-  if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing due today and nothing urgent.</p>'; return; }
+  const open = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at);
+  const due = open.filter(n => (n.due_date && n.due_date <= t) || n.priority === 'urgent'), dueSet = new Set(due);
+  const rest = open.filter(n => !dueSet.has(n));
+  const sw = document.createElement('div'); sw.className = 'view-switch';
+  for (const [key, label, list] of [['due', 'Due today', due], ['rest', 'Everything else', rest]]) {
+    const b = document.createElement('button'); b.className = S.todayMode === key ? 'on' : ''; b.innerHTML = '<span></span><b></b>';
+    b.firstChild.textContent = label; b.lastChild.textContent = list.length;
+    b.onclick = () => { S.todayMode = key; render(); };
+    sw.appendChild(b);
+  }
+  main.appendChild(sw);
+  const hits = (S.todayMode === 'rest' ? rest : due).filter(n => !q || hasQ(n, q)).map(n => n.id);
+  if (!hits.length) { const p = document.createElement('p'); p.className = 'empty-state'; p.textContent = S.todayMode === 'rest' ? 'Everything open is due today or urgent.' : 'Nothing due today and nothing urgent.'; main.appendChild(p); return; }
   renderOutline(main, hits);
 }
 function renderWaiting(main) {

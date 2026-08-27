@@ -385,6 +385,22 @@ async def main():
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(1000)
         check('one Ctrl+Z restores both', sa['id'] in tree() and sb['id'] in tree())
         await pg.keyboard.press('Escape')
+        # --- due soon → red; Today switch
+        plain = by_text(tree(), 'PhD Apps think through')
+        api_patch = lambda nid, body: urllib.request.urlopen(urllib.request.Request(URL + f'api/nodes/{nid}', data=json.dumps(body).encode(), method='PATCH', headers={'Content-Type': 'application/json'})).read()
+        import datetime as _dt
+        api_patch(plain['id'], {'due_date': (_dt.date.today() + _dt.timedelta(days=1)).isoformat()})
+        await pg.reload(); await pg.wait_for_selector('.node'); await pg.wait_for_timeout(300)
+        check('due tomorrow tags the task red', tree()[plain['id']]['priority'] == 'urgent' and (await pg.locator(f'.node[data-id="{plain["id"]}"]').get_attribute('data-prio')) == 'urgent')
+        await pg.locator(f'.node[data-id="{plain["id"]}"] > .row > .text').click(); await pg.keyboard.press('Control+Shift+Digit3'); await pg.wait_for_timeout(600)
+        await pg.reload(); await pg.wait_for_selector('.node'); await pg.wait_for_timeout(300)
+        check('a colour picked afterwards sticks', tree()[plain['id']]['priority'] == 'normal')
+        await pg.click('#tabs button[data-view=today]'); await pg.wait_for_timeout(400)
+        check('Today opens on Due today', 'Due today' in await pg.locator('.view-switch button.on').text_content())
+        await pg.locator('.view-switch button', has_text='Everything else').click(); await pg.wait_for_timeout(400)
+        check('Everything else lists open tasks that are not due', await pg.locator(f'.node[data-id="{plain["id"]}"]').count() == 1 and await pg.locator('#view .node.task:not(.ctx)').count() > 5, await pg.locator('#view .node.task:not(.ctx)').count())  # due tomorrow but no longer red → not 'due today'
+        await pg.locator('.view-switch button', has_text='Due today').click(); await pg.wait_for_timeout(300)
+        await pg.click('#tabs button[data-view=all]'); await pg.wait_for_timeout(300)
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))
