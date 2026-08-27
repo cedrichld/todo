@@ -126,27 +126,35 @@ function linkEl(label, href) {
   const a = document.createElement('a'); a.className = 'link'; a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.title = href;
   a.contentEditable = 'false'; a.textContent = label; return a;
 }
-function setText(el, text) {
+function setText(el, text, multiline = false) {
   el.textContent = '';
-  let last = 0, m; LINK_RE.lastIndex = 0;
-  while ((m = LINK_RE.exec(text))) {
-    if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
-    el.appendChild(m[1] != null ? linkEl(m[1], m[2]) : linkEl(m[3], m[3]));
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
-  else if (el.lastChild && el.lastChild.nodeType !== 3) el.appendChild(document.createTextNode(ZW));
+  const lines = multiline ? text.split('\n') : [text];
+  lines.forEach((line, i) => {
+    if (i) el.appendChild(document.createElement('br'));
+    let last = 0, m; LINK_RE.lastIndex = 0;
+    while ((m = LINK_RE.exec(line))) {
+      if (m.index > last) el.appendChild(document.createTextNode(line.slice(last, m.index)));
+      el.appendChild(m[1] != null ? linkEl(m[1], m[2]) : linkEl(m[3], m[3]));
+      last = m.index + m[0].length;
+    }
+    if (last < line.length) el.appendChild(document.createTextNode(line.slice(last)));
+  });
+  if (multiline && lines.length > 1 && lines.at(-1) === '') el.appendChild(document.createElement('br'));  // a trailing newline needs a second <br> to show as a line
+  if (el.lastChild && el.lastChild.nodeType !== 3 && el.lastChild.nodeName !== 'BR') el.appendChild(document.createTextNode(ZW));
 }
 const ZW = '\u200b';
 function getText(el) {
   let out = '';
   for (const c of el.childNodes) {
     if (c.nodeType === 3) out += c.data.replaceAll(ZW, '');
+    else if (c.nodeName === 'BR') out += '\n';
     else if (c.classList?.contains('link')) { const href = c.getAttribute('href'), label = c.textContent; out += label === href ? href : `[${label}](${href})`; }
-    else out += c.textContent;
+    else { if (/^(DIV|P)$/.test(c.nodeName) && out && !out.endsWith('\n')) out += '\n'; out += getText(c); }
   }
   return out;
 }
+// The browser keeps a <br> at the end of an editable block so the caret has a line to sit on; it is not a newline of the note.
+function readNote(el) { const t = getText(el); return el.lastChild?.nodeName === 'BR' && t.endsWith('\n') ? t.slice(0, -1) : t; }
 function textBeforeCaret(el) {
   const sel = getSelection(); if (!sel.rangeCount || !el.contains(sel.anchorNode)) return getText(el);
   const r = sel.getRangeAt(0).cloneRange(); r.setStart(el, 0);
@@ -164,7 +172,7 @@ function caretEdge(el) {
 // Where the caret is right now, in a form focusNode() can put back after a redraw.
 function keepFocus() {
   const active = document.activeElement;
-  if (active?.classList?.contains('note-text')) return { id: +active.closest('.node').dataset.id, note: active.selectionStart };
+  if (active?.classList?.contains('note-text')) return { id: +active.closest('.node').dataset.id, note: caretOffset(active) };
   return active?.classList?.contains('text') ? { id: +active.closest('.node').dataset.id, caret: caretOffset(active) } : null;
 }
 function focusNode(id, caret = 'end') {
@@ -189,7 +197,6 @@ function render() {
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
   tabCounts();
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
-  $$('#view .note-text').forEach(autosize);  // scrollHeight is only known once attached
   if (S.current != null) $(`.node[data-id="${S.current}"]`)?.classList.add('current');
   window.scrollTo(0, y);
   if (keep) focusNode(keep.id, 'note' in keep ? { note: keep.note } : keep.caret);
@@ -264,12 +271,12 @@ function applyStyle(el, n) {
   const t = $(':scope > .row > .text', el);
   t.style.color = n.color && !n.done_at ? n.color : '';
   const pv = $(':scope > .row > .note-preview', el), open = S.noteOpen.has(n.id);
-  pv.textContent = open ? '' : (n.note || '').split('\n')[0];
+  if (open) pv.textContent = ''; else setText(pv, (n.note || '').split('\n')[0]);
   pv.classList.toggle('empty', !n.note && !open);
   pv.classList.toggle('open', open);
   pv.title = open ? 'Hide note (Ctrl+. or Esc)' : 'Show note (Ctrl+.)';
   const ed = $(':scope > .note > .note-text', el);
-  if (ed && document.activeElement !== ed && ed.value !== (n.note || '')) { ed.value = n.note || ''; autosize(ed); }
+  if (ed && document.activeElement !== ed && readNote(ed) !== (n.note || '')) setText(ed, n.note || '', true);
   const check = $(':scope > .row > .check', el); if (check) check.checked = !!n.done_at;
   const dot = $(':scope > .row > .dot', el);
   if (dot) { const c = n.color || PRIO_COLOR[n.priority] || ''; dot.style.background = c; dot.style.borderColor = c || ''; }
@@ -300,18 +307,20 @@ function setWaiting(n, who, since, label) {
   if (S.view !== 'all') render();
 }
 // Notes: free text under the title (emails, links, details). Collapsed to a grey first line; Ctrl+. or a click expands it.
-function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
 function noteEditor(n) {
   const box = document.createElement('div'); box.className = 'note';
-  const ta = document.createElement('textarea'); ta.className = 'note-text'; ta.rows = 1; ta.spellcheck = false;
-  ta.placeholder = 'Notes — emails, links, details you don’t want to keep in your head';
-  ta.value = n.note || '';
-  box.appendChild(ta);
+  const ed = document.createElement('div'); ed.className = 'note-text'; ed.contentEditable = 'true'; ed.spellcheck = false;
+  ed.dataset.placeholder = 'Notes — emails, links, details you don’t want to keep in your head';
+  setText(ed, n.note || '', true);
+  box.appendChild(ed);
   return box;
 }
 function focusNote(id, at = 'end') {
-  const ta = $(`.node[data-id="${id}"] > .note > .note-text`); if (!ta) return;
-  ta.focus(); const p = at === 'end' ? ta.value.length : at; ta.setSelectionRange(p, p); ta.scrollIntoView({ block: 'nearest' });
+  const ed = $(`.node[data-id="${id}"] > .note > .note-text`); if (!ed) return;
+  if (at === 'end' && ed.lastChild?.nodeName === 'BR') {  // land on the empty last line, not before its <br>
+    ed.focus(); const r = document.createRange(); r.setStart(ed, ed.childNodes.length); r.collapse(true); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  } else setCaret(ed, at === 'end' ? ed.textContent.length : at);
+  ed.scrollIntoView({ block: 'nearest' });
 }
 function toggleNote(n, focus = true) {
   const el = $(`.node[data-id="${n.id}"]`); if (!el) return;
@@ -324,13 +333,13 @@ function toggleNote(n, focus = true) {
   }
   S.noteOpen.add(n.id);
   const ed = noteEditor(n); el.insertBefore(ed, $(':scope > .row', el).nextSibling);
-  autosize(ed.firstChild); applyStyle(el, n);
+  applyStyle(el, n);
   if (focus) focusNote(n.id);
 }
 const noteTimers = new Map();
 function onNoteInput(ta) {
   const n = nodeOf(ta); if (!n) return;
-  n.note = ta.value || null; autosize(ta);
+  n.note = readNote(ta) || null;
   clearTimeout(noteTimers.get(n.id));
   noteTimers.set(n.id, setTimeout(() => flushNote(n.id), 300));
 }
@@ -350,6 +359,7 @@ function onNoteKey(e, ta, n) {
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (ctrl && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }
+  if (e.key === 'Enter') { e.preventDefault(); if (!document.execCommand('insertLineBreak')) document.execCommand('insertHTML', false, '<br>'); return; }
 }
 function patchNodeDom(n) { const el = $(`.node[data-id="${n.id}"]`); if (el) applyStyle(el, n); }
 
@@ -374,15 +384,20 @@ function flushText(id) {
   queue.run(() => api.patch(id, { text })).catch(showError);
 }
 function onPaste(e) {
-  const t = e.target; if (!t.classList?.contains('text')) return;
+  const t = e.target; if (!t.classList?.contains('text') && !t.classList?.contains('note-text')) return;
   e.preventDefault();
   insertPasted(t, e.clipboardData.getData('text/plain') || '');
 }
 function insertPasted(t, raw) {
-  const sel = getSelection();
-  if (/^https?:\/\/\S+$/.test(raw.trim()) && sel.rangeCount && !sel.isCollapsed && t.contains(sel.anchorNode)) {
-    // a url pasted over highlighted words turns them into a link, like in Docs
-    document.execCommand('insertHTML', false, linkEl(sel.toString(), raw.trim()).outerHTML + ZW);
+  const sel = getSelection(), url = raw.trim();
+  if (/^https?:\/\/\S+$/.test(url) && sel.rangeCount && t.contains(sel.anchorNode)) {
+    // a pasted url becomes a link at once; over highlighted words it links those words, like in Docs
+    document.execCommand('insertHTML', false, linkEl(sel.isCollapsed ? url : sel.toString(), url).outerHTML + ZW);
+    return;
+  }
+  if (t.classList.contains('note-text')) {
+    const esc = raw.replace(/\r\n?/g, '\n').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    document.execCommand('insertHTML', false, esc.replaceAll('\n', '<br>'));
     return;
   }
   document.execCommand('insertText', false, raw.replace(/\s*[\r\n]+\s*/g, ' '));
