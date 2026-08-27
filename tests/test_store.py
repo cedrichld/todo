@@ -355,12 +355,12 @@ class Mirror(StoreTestCase):
 
 
 class Queries(StoreTestCase):
-    def test_path_lists_heading_ancestors_only(self):
+    def test_path_lists_every_ancestor(self):
         h1 = self.s.create(kind='heading', text='Lab')
         h2 = self.s.create(parent_id=h1['id'], kind='heading', text='Racer')
         t = self.s.create(parent_id=h2['id'], text='parent task')
         k = self.s.create(parent_id=t['id'], text='kid')
-        self.assertEqual(self.s.path(k['id']), ['Lab', 'Racer'])
+        self.assertEqual(self.s.path(k['id']), ['Lab', 'Racer', 'parent task'])
         self.assertEqual(self.s.path(h1['id']), [])
 
     def test_done_log_groups_by_day_and_includes_archived(self):

@@ -90,6 +90,7 @@ function index() {
 }
 const kidsOf = id => S.kids.get(id) || [];
 const nodeOf = el => { const x = el?.closest?.('.node'); return x ? S.nodes.get(+x.dataset.id) : null; };
+function taskPath(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn || pn.kind !== 'task') break; out.unshift(pn.text); p = pn.parent_id; } return out; }  // parent tasks up to the section
 function pathOf(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn) break; if (pn.kind === 'heading') out.unshift(pn.text); p = pn.parent_id; } return out; }
 function isDescendant(n, ancestor) { let p = n.parent_id; while (p != null) { if (p === ancestor.id) return true; p = S.nodes.get(p)?.parent_id; } return false; }
 function treeOrder() { const m = new Map(); let i = 0; (function walk(pid) { for (const n of kidsOf(pid)) { m.set(n.id, i++); walk(n.id); } })(null); return m; }
@@ -874,7 +875,11 @@ function renderGrouped(main, items, sortWithin) {
   for (const { path, list } of groups.values()) {
     main.appendChild(sectionHeading(path));
     list.sort(sortWithin);
-    for (const n of list) main.appendChild(renderNode(n, 0, null, false, true));
+    for (const n of list) {
+      const el = renderNode(n, 0, null, false, true), parents = taskPath(n);
+      if (parents.length) { const c = document.createElement('span'); c.className = 'crumb'; c.textContent = parents.join(' › ') + ' ›'; $(':scope > .row', el).insertBefore(c, $(':scope > .row > .text', el)); }
+      main.appendChild(el);
+    }
   }
 }
 function renderToday(main) {
@@ -911,9 +916,9 @@ async function renderDone(main) {
     const h = document.createElement('h2'); h.className = 'group'; h.textContent = `${fmtDay(day.day)} · ${items.length}`; main.appendChild(h);
     for (const n of items) {
       const row = document.createElement('div'); row.className = 'log-row';
-      row.innerHTML = `<input type="checkbox" checked title="Mark not done"><span class="log-text"></span><span class="path"></span><span class="log-time"></span>`;
+      row.innerHTML = `<input type="checkbox" checked title="Mark not done"><span class="crumb"></span><span class="log-text"></span><span class="log-time"></span>`;
       setText($('.log-text', row), n.text);
-      $('.path', row).textContent = n.path.join(' › ');
+      $('.crumb', row).textContent = n.path.length ? n.path.join(' › ') + ' ›' : '';
       $('.log-time', row).textContent = n.done_at.slice(11, 16);
       $('input', row).onchange = () => queue.run(() => api.done(n.id, false)).then(() => refresh()).catch(showError);
       main.appendChild(row);
@@ -943,6 +948,15 @@ async function renderHistory(main) {
 }
 
 // ---------------------------------------------------------------- top bar + boot
+// Theme: an explicit choice is remembered; otherwise the system setting applies. `.dark` on <html> drives the icon.
+function applyTheme(choice, animate) {
+  const root = document.documentElement;
+  if (choice === 'light' || choice === 'dark') root.dataset.theme = choice; else delete root.dataset.theme;
+  const dark = choice ? choice === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  if (animate) { root.classList.add('theming'); clearTimeout(applyTheme.t); applyTheme.t = setTimeout(() => root.classList.remove('theming'), 400); }
+  root.classList.toggle('dark', dark);
+  $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+}
 function setView(v) { S.view = v; localStorage.setItem('view', v); closePopover(); render(); }
 function boot() {
   const view = $('#view');
@@ -964,6 +978,9 @@ function boot() {
   hide.onchange = () => { S.hideDone = hide.checked; localStorage.setItem('hideDone', hide.checked ? '1' : '0'); render(); };
   $('#archive-done').onclick = archiveAllDone;
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
+  applyTheme(localStorage.getItem('theme'), false);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(localStorage.getItem('theme'), false));
+  $('#theme').onclick = () => { const next = document.documentElement.classList.contains('dark') ? 'light' : 'dark'; localStorage.setItem('theme', next); applyTheme(next, true); };
   const search = $('#search');
   let st; search.oninput = () => { clearTimeout(st); st = setTimeout(() => { S.query = search.value; render(); }, 150); };
   search.onkeydown = e => { if (e.key === 'Escape') { search.value = ''; S.query = ''; render(); search.blur(); } };

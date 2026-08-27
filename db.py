@@ -462,12 +462,12 @@ class Store:
 
     # ------------------------------------------------------------ queries
     def path(self, node_id):
+        """Texts of every ancestor, outermost first (sections and parent tasks alike)."""
         out = []
         pid = self.get(node_id)['parent_id']
         while pid is not None:
             p = self.get(pid)
-            if p['kind'] == 'heading':
-                out.append(p['text'])
+            out.append(p['text'])
             pid = p['parent_id']
         out.reverse()
         return out
