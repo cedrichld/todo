@@ -341,7 +341,8 @@ async def main():
         await pg.locator(f'.node[data-id="{lk["id"]}"] > .row > .text').click(); await pg.keyboard.press('End'); await pg.keyboard.press('Enter'); await pg.wait_for_timeout(600)
         check('Enter after a link splits cleanly', tree()[lk['id']]['text'] == '[Slack repost](https://example.com/attendants) now', tree()[lk['id']]['text'])
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(600)
-        await pg.locator(f'.node[data-id="{lk["id"]}"] > .row > .text').click(); await pg.keyboard.press('End'); await pg.keyboard.type(' see ')
+        tl = pg.locator(f'.node[data-id="{lk["id"]}"] > .row > .text'); tb = await tl.bounding_box()
+        await tl.click(position={'x': tb['width'] - 2, 'y': tb['height'] / 2}); await pg.keyboard.press('End'); await pg.keyboard.type(' see ')  # past the link, at the end of the words
         await pg.evaluate("() => insertPasted(document.activeElement, 'https://example.com/x')"); await pg.wait_for_timeout(700)
         check('a url pasted with nothing selected links itself', tree()[lk['id']]['text'].endswith(' see https://example.com/x') and await pg.locator(f'.node[data-id="{lk["id"]}"] > .row > .text a.link').count() == 2, tree()[lk['id']]['text'])
         # --- light / dark toggle
