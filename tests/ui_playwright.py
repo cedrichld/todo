@@ -124,15 +124,17 @@ async def main():
         await pg.locator(f'.node[data-id="{fold_node["id"]}"] > .row > .fold').click(); await pg.wait_for_timeout(400)
         check('unfold shows children', await pg.locator(f'.node[data-id="{fold_node["id"]}"] .kids .node').count() == 4)
         # --- search
-        await pg.keyboard.press('Control+k'); await pg.keyboard.type('jo'); await pg.wait_for_timeout(400)
-        check('search shows match + its ancestors only', await pg.locator('#view .node.task').count() == 2 and await pg.locator('#view .node.task > .row > .text', has_text='jo').count() == 1, await pg.locator('#view .node.task').count())
+        await pg.keyboard.press('Control+k'); await pg.keyboard.type('jo bell'); await pg.wait_for_timeout(400)
+        check('search shows match + its ancestors only', await pg.locator('#view .node.task').count() == 2 and await pg.locator('#view .node.task > .row > .text', has_text='jo bell').count() == 1, await pg.locator('#view .node.task').count())
         await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300)
         check('Escape clears search', await pg.locator('#view .node').count() > 100)
         # --- views
         await pg.click('#tabs button[data-view=today]'); await pg.wait_for_timeout(400)
         heads = await pg.locator('#view .node.heading').count(); items = await pg.locator('#view .node.task').count()
-        check('Today view keeps the outline (sections + tasks)', heads >= 3 and items >= 17, (heads, items))
+        check('Today view keeps the outline (sections + tasks)', heads >= 2 and items >= 3, (heads, items))
         sub = by_text(tree(), 'Update the Racer'); par = by_text(tree(), 'Orientation 1 time')
+        urllib.request.urlopen(urllib.request.Request(URL + f'api/nodes/{sub["id"]}', data=json.dumps({'due_date': __import__('datetime').date.today().isoformat()}).encode(), method='PATCH', headers={'Content-Type': 'application/json'})).read()
+        await pg.reload(); await pg.wait_for_selector('.node'); await pg.click('#tabs button[data-view=today]'); await pg.wait_for_timeout(500)
         check('Today nests a sub-task under its parent task like All', await pg.locator(f'.node[data-id="{par["id"]}"] > .kids > .node[data-id="{sub["id"]}"]').count() == 1)
         check('sections with nothing due are left out', await pg.locator('#view .node.heading > .row > .text', has_text='Career').count() == 0)
         await pg.screenshot(path=f'{SP}/ui-today.png')
@@ -434,6 +436,16 @@ async def main():
         await pg.mouse.click(5, 400)  # the page margin, left of the outline
         await pg.wait_for_timeout(150)
         check('clicking the paper clears the highlight and selection', await pg.locator('#view .node.current, #view .node.selected').count() == 0 and await pg.evaluate('S.current') is None)
+        # --- priority filter
+        await pg.click('#filter-btn'); await pg.wait_for_timeout(200)
+        await pg.locator('#popover .filter-list label', has_text='Urgent').click(); await pg.wait_for_timeout(400)
+        urgent = [n for n in tree().values() if n['kind'] == 'task' and n['priority'] == 'urgent' and not n['color']]
+        shown = await pg.locator('#view .node.task:not(.ctx)').count()
+        check('filtering on Urgent shows only urgent tasks', shown == len(urgent) and shown > 0, (shown, len(urgent)))
+        check('the Filter button says it is active', 'on' in (await pg.locator('#filter-btn').get_attribute('class') or ''))
+        await pg.locator('#popover .filter-list button', has_text='Clear').click(); await pg.wait_for_timeout(400)
+        check('clearing the filter shows everything again', await pg.locator('#view .node').count() > 100)
+        await pg.keyboard.press('Escape')
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))

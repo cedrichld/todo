@@ -61,7 +61,7 @@ function statRow(d) {
     tile('Done this week', nice(T.done_7), `${delta >= 0 ? '+' : '−'}${Math.abs(delta)} vs the week before`, spark),
     tile('Open now', nice(T.open), `${plural(T.overdue, 'overdue')} · ${T.waiting} waiting`),
     tile('Streak', plural(d.streak, 'day'), `best ${plural(d.best_streak, 'day')}`),
-    tile('Done this year', nice(T.done_365), `${T.created_30} added in the last 30 days`));
+    tile('Done this year', nice(T.done_365), `${nice(T.done_all_time)} since the beginning · ${T.created_30} added in 30 days`));
 }
 function heatmap(d) {
   const cell = 11, gap = 2, step = cell + gap, first = parseISO(d.days[0]), lead = (first.getDay() + 6) % 7;  // Monday-first rows

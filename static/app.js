@@ -79,6 +79,7 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
+  filter: new Set(JSON.parse(localStorage.getItem('filter') || '[]')),  // priorities to show; empty = everything
   scroll: {},  // scroll position remembered per tab
   todayMode: 'due',  // Today tab: 'due' (default) or 'rest' — everything open that is not due
   sel: new Set(), selAnchor: null,  // multi-selection of rows (ids) and the end it grows from
@@ -100,10 +101,13 @@ function pathOf(n) { const out = []; let p = n.parent_id; while (p != null) { co
 function isDescendant(n, ancestor) { let p = n.parent_id; while (p != null) { if (p === ancestor.id) return true; p = S.nodes.get(p)?.parent_id; } return false; }
 function treeOrder() { const m = new Map(); let i = 0; (function walk(pid) { for (const n of kidsOf(pid)) { m.set(n.id, i++); walk(n.id); } })(null); return m; }
 const hasQ = (n, q) => n.text.toLowerCase().includes(q) || (n.note || '').toLowerCase().includes(q);
+// the priority filter: a task passes if its colour/priority is ticked; headings only ever come along as ancestors
+const prioKey = n => n.kind !== 'task' ? null : n.color ? 'custom' : n.priority;
+const passesFilter = n => !S.filter.size || (n.kind === 'task' && S.filter.has(prioKey(n)));
 function matchSet() {
-  const q = S.query.trim().toLowerCase(); if (!q) return null;
+  const q = S.query.trim().toLowerCase(), f = S.filter.size > 0; if (!q && !f) return null;
   const set = new Set();
-  for (const n of S.nodes.values()) if (hasQ(n, q)) { let cur = n; while (cur) { set.add(cur.id); cur = S.nodes.get(cur.parent_id); } }
+  for (const n of S.nodes.values()) if ((!q || hasQ(n, q)) && (!f || passesFilter(n))) { let cur = n; while (cur) { set.add(cur.id); cur = S.nodes.get(cur.parent_id); } }
   return set;
 }
 
@@ -202,9 +206,9 @@ function render() {
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
   main.classList.toggle('filtered', S.view !== 'all');
-  glide();
   if (S.view !== 'done') S.extra = null;
   tabCounts();
+  glide();  // after the counts, which change the tabs' widths
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory, insights: renderInsights })[S.view](main);
   if (S.current != null) $(`.node[data-id="${S.current}"]`)?.classList.add('current');
   for (const id of S.sel) $(`.node[data-id="${id}"]`)?.classList.add('selected');
@@ -213,7 +217,7 @@ function render() {
 }
 function tabCounts() {
   const t = todayISO(); let today = 0, waiting = 0;
-  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if ((n.due_date && n.due_date <= t) || n.priority === 'urgent') today++; if (n.waiting_on) waiting++; }
+  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if (n.due_date && n.due_date <= t) today++; if (n.waiting_on) waiting++; }
   for (const b of $$('#tabs button')) {
     const c = { today, waiting }[b.dataset.view]; let badge = $('b', b);
     if (!c) { badge?.remove(); continue; }
@@ -226,6 +230,7 @@ function renderAll(main) {
   main.innerHTML = '';
   const tree = document.createElement('div'); tree.id = 'tree';
   tree.appendChild(renderChildren(null, 0, match, !!match));
+  if (S.filter.size) for (const el of $$('.node.task', tree)) { const n = S.nodes.get(+el.dataset.id); if (n && !passesFilter(n)) el.classList.add('ctx'); }  // parents kept only for context
   main.appendChild(tree);
   if (!S.nodes.size) { const p = document.createElement('p'); p.className = 'empty-state'; p.textContent = 'Empty list. Add a section to start.'; main.appendChild(p); }
   const add = document.createElement('button'); add.id = 'add-root'; add.textContent = 'New section';
@@ -895,6 +900,22 @@ function nodeMenu(n) {
   }
   return box;
 }
+function filterPicker() {
+  const box = document.createElement('div'); box.className = 'filter-list';
+  box.appendChild(Object.assign(document.createElement('div'), { className: 'wait-title', textContent: 'Show only' }));
+  for (const [key, label] of [['urgent', 'Urgent'], ['soon', 'Soon'], ['normal', 'Normal'], ['later', 'Later'], ['custom', 'Custom colour'], ['none', 'No priority']]) {
+    const l = document.createElement('label'); l.className = 'swatch'; l.dataset.prio = key;
+    const c = document.createElement('input'); c.type = 'checkbox'; c.checked = S.filter.has(key);
+    c.onchange = () => { c.checked ? S.filter.add(key) : S.filter.delete(key); saveFilter(); };
+    l.appendChild(c); l.appendChild(document.createElement('i')); l.appendChild(document.createTextNode(label));
+    box.appendChild(l);
+  }
+  const clear = document.createElement('button'); clear.className = 'clear'; clear.textContent = 'Clear';
+  clear.onclick = () => { S.filter.clear(); saveFilter(); $$('input', box).forEach(c => { c.checked = false; }); };
+  box.appendChild(clear);
+  return box;
+}
+function saveFilter() { localStorage.setItem('filter', JSON.stringify([...S.filter])); $('#filter-btn').classList.toggle('on', S.filter.size > 0); $('#filter-btn').textContent = S.filter.size ? `Filter · ${S.filter.size}` : 'Filter'; render(); }
 function helpPanel() {
   const box = document.createElement('div'); box.className = 'help';
   const rows = [
@@ -987,8 +1008,8 @@ function renderOutline(main, hits, extra) {
 function renderToday(main) {
   main.innerHTML = '';
   const t = todayISO(), q = S.query.trim().toLowerCase();
-  const open = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at);
-  const due = open.filter(n => (n.due_date && n.due_date <= t) || n.priority === 'urgent'), dueSet = new Set(due);
+  const open = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at && passesFilter(n));
+  const due = open.filter(n => n.due_date && n.due_date <= t), dueSet = new Set(due);  // by date only: overdue or due today
   const rest = open.filter(n => !dueSet.has(n));
   const sw = document.createElement('div'); sw.className = 'view-switch';
   for (const [key, label, list] of [['due', 'Due today', due], ['rest', 'Everything else', rest]]) {
@@ -999,13 +1020,13 @@ function renderToday(main) {
   }
   main.appendChild(sw);
   const hits = (S.todayMode === 'rest' ? rest : due).filter(n => !q || hasQ(n, q)).map(n => n.id);
-  if (!hits.length) { const p = document.createElement('p'); p.className = 'empty-state'; p.textContent = S.todayMode === 'rest' ? 'Everything open is due today or urgent.' : 'Nothing due today and nothing urgent.'; main.appendChild(p); return; }
+  if (!hits.length) { const p = document.createElement('p'); p.className = 'empty-state'; p.textContent = S.todayMode === 'rest' ? 'Everything open is due today.' : 'Nothing due today.'; main.appendChild(p); return; }
   renderOutline(main, hits);
 }
 function renderWaiting(main) {
   main.innerHTML = '';
   const q = S.query.trim().toLowerCase();
-  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && n.waiting_on && !n.done_at && (!q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))).map(n => n.id);
+  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && n.waiting_on && !n.done_at && passesFilter(n) && (!q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))).map(n => n.id);
   if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
   renderOutline(main, hits);
 }
@@ -1017,7 +1038,7 @@ async function renderDone(main) {
   main.innerHTML = '';
   const q = S.query.trim().toLowerCase(), extra = new Map(nodes.map(n => [n.id, n]));
   S.extra = extra;
-  const hits = nodes.filter(n => n.kind === 'task' && n.done_at && (!q || hasQ(n, q))).map(n => n.id);
+  const hits = nodes.filter(n => n.kind === 'task' && n.done_at && passesFilter(n) && (!q || hasQ(n, q))).map(n => n.id);
   if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing done yet.</p>'; return; }
   renderOutline(main, hits, extra);
   arrive(main);
@@ -1112,6 +1133,8 @@ function glide() {
 }
 // the History tab changes width while it folds in or out: keep the pill on the active tab as it does
 document.addEventListener('transitionend', e => { if (e.target.closest?.('#tabs') && (e.propertyName === 'max-width' || e.propertyName === 'padding-left')) glide(); });
+window.addEventListener('resize', glide);
+document.fonts?.ready.then(glide);
 function boot() {
   const view = $('#view');
   view.addEventListener('keydown', onKey);
@@ -1145,6 +1168,8 @@ function boot() {
   hide.onchange = () => { S.hideDone = hide.checked; localStorage.setItem('hideDone', hide.checked ? '1' : '0'); render(); };
   $('#archive-done').onclick = archiveAllDone;
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
+  $('#filter-btn').onclick = e => openPopover(e.target, filterPicker());
+  $('#filter-btn').classList.toggle('on', S.filter.size > 0); if (S.filter.size) $('#filter-btn').textContent = `Filter · ${S.filter.size}`;
   applyTheme(localStorage.getItem('theme'), false);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(localStorage.getItem('theme'), false));
   $('#theme').onclick = () => { const next = document.documentElement.classList.contains('dark') ? 'light' : 'dark'; localStorage.setItem('theme', next); applyTheme(next, true); };
@@ -1152,7 +1177,7 @@ function boot() {
   let st; search.oninput = () => { clearTimeout(st); st = setTimeout(() => { S.query = search.value; render(); }, 150); };
   search.onkeydown = e => { if (e.key === 'Escape') { search.value = ''; S.query = ''; render(); search.blur(); } };
   document.addEventListener('keydown', onGlobalKey);
-  document.addEventListener('mousedown', e => { const pop = $('#popover'); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.dot, .chip, .menu, #help-btn')) closePopover(); });
+  document.addEventListener('mousedown', e => { const pop = $('#popover'); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.dot, .chip, .menu, #help-btn, #filter-btn')) closePopover(); });
   window.addEventListener('beforeunload', flushAll);
   refresh();
 }

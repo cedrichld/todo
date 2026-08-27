@@ -490,7 +490,7 @@ class DueSoon(StoreTestCase):
 
 
 class Snapshots(StoreTestCase):
-    """One compressed copy of the list per day it was saved; a year is kept; older data goes at open."""
+    """One compressed copy of the list per day it was saved; a year of snapshots is kept, history forever."""
 
     def test_every_save_updates_todays_snapshot_and_old_ones_are_pruned(self):
         today = datetime.date.today().isoformat()
@@ -512,7 +512,7 @@ class Snapshots(StoreTestCase):
         self.s.close()
         self.s = Store(path, md_path=self.md)
         self.assertEqual(self.s.snapshot_days(), [kept_day, today])
-        self.assertEqual(self.s.conn.execute('SELECT COUNT(*) FROM history WHERE ts LIKE ?', (old_day + '%',)).fetchone()[0], 0)
+        self.assertEqual(self.s.conn.execute('SELECT COUNT(*) FROM history WHERE ts LIKE ?', (old_day + '%',)).fetchone()[0], 1)  # history is kept: years of completions stay countable
         # a day without a snapshot shows the latest earlier one; before any snapshot there is nothing
         between = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
         self.assertEqual(self.s.snapshot(between)['day'], kept_day)

@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
   nodes    BLOB NOT NULL
 );
 """
-RETENTION_DAYS = 365  # snapshots and history older than this are dropped when the store opens
+RETENTION_DAYS = 365  # daily snapshots older than this are dropped when the store opens; the history of what was done is kept forever
 
 
 def now_iso():
@@ -153,7 +153,6 @@ class Store:
         cutoff = (datetime.date.today() - datetime.timedelta(days=RETENTION_DAYS)).isoformat()
         with self.conn:
             self.conn.execute('DELETE FROM snapshots WHERE day < ?', (cutoff,))
-            self.conn.execute('DELETE FROM history WHERE substr(ts, 1, 10) < ?', (cutoff,))
 
     def snapshot_days(self):
         return [r['day'] for r in self.conn.execute('SELECT day FROM snapshots ORDER BY day')]

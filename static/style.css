@@ -90,8 +90,16 @@ button { cursor: pointer; }
 #hide-done-label { font-family: var(--sans); font-size: .82rem; color: var(--muted); display: flex; gap: .35rem; align-items: center; cursor: pointer; }
 #hide-done { appearance: none; width: .9rem; height: .9rem; margin: 0; border: 1.5px solid var(--faint); border-radius: 4px; background: var(--paper); transition: background-color .15s, border-color .15s; }
 #hide-done:checked { background: var(--accent) var(--i-check) center / 80% no-repeat; border-color: var(--accent); }
-#archive-done, #help-btn { font-size: .8rem; background: none; border: 1px solid var(--line); border-radius: 999px; padding: .18rem .7rem; color: var(--muted); transition: color .15s, background-color .15s, border-color .15s; }
-#archive-done:hover, #help-btn:hover { color: var(--fg); background: var(--chip); }
+#filter-btn.on { color: var(--fg); background: var(--chip); }
+.filter-list { display: flex; flex-direction: column; gap: .15rem; min-width: 11rem; }
+.filter-list label { cursor: pointer; }
+.filter-list label input { accent-color: var(--accent); margin: 0; }
+.filter-list .swatch[data-prio=custom] i { background: conic-gradient(#e5801a, #d3a212, #2f6fd1, #c8261b, #e5801a); border: none; }
+.filter-list .swatch[data-prio=none] i { background: transparent; }
+.filter-list .clear { align-self: flex-start; margin-top: .3rem; background: none; border: none; color: var(--muted); font-size: .85rem; padding: .1rem .5rem; }
+.filter-list .clear:hover { color: var(--fg); }
+#archive-done, #filter-btn, #help-btn { font-size: .8rem; background: none; border: 1px solid var(--line); border-radius: 999px; padding: .18rem .7rem; color: var(--muted); transition: color .15s, background-color .15s, border-color .15s; }
+#archive-done:hover, #filter-btn:hover, #help-btn:hover { color: var(--fg); background: var(--chip); }
 #help-btn { width: 1.9rem; padding-inline: 0; text-align: center; font-weight: 600; }
 #theme { width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: 50%; background: none; color: var(--muted); display: grid; place-items: center; padding: 0; transition: color .2s, background-color .2s, border-color .2s; }
 #theme:hover { color: var(--fg); background: var(--chip); }
