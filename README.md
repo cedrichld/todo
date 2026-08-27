@@ -21,8 +21,10 @@ Tests: `python3 -m unittest discover -s tests -v`
 |---|---|
 | Enter | new item below (splits at cursor); on a heading: first child |
 | Backspace on empty | delete item |
-| Tab / Shift+Tab | nest / un-nest |
-| Alt+↑ / Alt+↓ | move up / down |
+| Tab / Shift+Tab | nest / un-nest (works from the checkbox, dot or menu too) |
+| Alt+↑ / Alt+↓ | move up / down (hops out of / into neighbouring sections) |
+| Ctrl+/ | move to section… (type to filter, Enter picks) |
+| Ctrl+Z / Ctrl+Y | undo / redo (Ctrl+Shift+Z also redoes) |
 | ↑ / ↓ | previous / next item |
 | Ctrl+Enter | done / not done |
 | Ctrl+Shift+1 / 2 / 3 / 4 | urgent (red) / soon (orange) / normal (yellow) / later (blue) |
@@ -33,7 +35,8 @@ Tests: `python3 -m unittest discover -s tests -v`
 | Esc | close popover / unfocus |
 
 Click the dot for the priority picker (incl. custom color), the chip for due,
-`⋯` for the menu, drag `⋮⋮` to reorder.
+`⋯` for the menu (incl. "Move to section…"), drag `⋮⋮` to reorder — drop on the
+lower half of a section title to put the item inside that section.
 
 ## Phone later
 

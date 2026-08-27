@@ -177,12 +177,12 @@ class Structure(StoreTestCase):
         self.s.set_done(self.a['id'], True)
         self.s.set_done(self.b['id'], True)
         self.s.create(parent_id=self.b['id'], text='still open')
-        self.assertEqual(self.s.archive_done(), 1)
+        self.assertEqual(self.s.archive_done(), [self.a['id']])
         self.assertEqual(self.texts(self.h['id']), ['b', 'c'])
         self.s.set_done(self.c['id'], True)
         self.s.update(self.c['id'], text='c')  # touch; done_at is today
-        self.assertEqual(self.s.archive_done(before='2000-01-01'), 0)
-        self.assertEqual(self.s.archive_done(), 1)
+        self.assertEqual(self.s.archive_done(before='2000-01-01'), [])
+        self.assertEqual(self.s.archive_done(), [self.c['id']])
 
     def test_undone_restores_archived_node_and_parents(self):
         self.s.set_done(self.a['id'], True)
@@ -239,3 +239,50 @@ class Queries(StoreTestCase):
         self.assertEqual([n['id'] for n in self.s.search('jo')], [a['id']])
         self.s.delete(a['id'])
         self.assertEqual(self.s.search('jo'), [])
+
+
+class Undo(StoreTestCase):
+    def setUp(self):
+        super().setUp()
+        self.h = self.s.create(kind='heading', text='H')
+        self.a = self.s.create(parent_id=self.h['id'], text='a')
+        self.b = self.s.create(parent_id=self.h['id'], text='b')
+        self.c = self.s.create(parent_id=self.h['id'], text='c')
+
+    def test_hard_delete_of_nonempty_node(self):
+        res = self.s.delete(self.b['id'], hard=True)
+        self.assertEqual(res, {'id': self.b['id'], 'hard': True})
+        with self.assertRaises(StoreError):
+            self.s.get(self.b['id'])
+        self.assertEqual(self.texts(self.h['id']), ['a', 'c'])
+        self.assertFalse([r for r in self.s.history(limit=1000) if r['node_id'] == self.b['id']])
+
+    def test_restore_puts_subtree_back_in_place(self):
+        k = self.s.create(parent_id=self.b['id'], text='kid')
+        old_kid = self.s.create(parent_id=self.b['id'], text='')
+        self.s.delete(old_kid['id'])  # hard, gone for good
+        self.s.delete(self.b['id'])  # archives b + kid
+        self.assertEqual(self.texts(self.h['id']), ['a', 'c'])
+        n = self.s.restore(self.b['id'], parent_id=self.h['id'], after_id=self.a['id'])
+        self.assertIsNone(n['archived_at'])
+        self.assertEqual(self.texts(self.h['id']), ['a', 'b', 'c'])
+        self.assertEqual(self.texts(self.b['id']), ['kid'])
+        self.assertEqual([r['snapshot'] for r in self.chrono('restore')], ['b', 'kid'])
+        self.assertEqual(self.s.restore(self.b['id'])['id'], self.b['id'])  # no-op when active
+
+    def test_restore_defaults_to_end_of_old_parent_and_revives_archived_parent(self):
+        self.s.delete(self.a['id'])
+        self.s.delete(self.h['id'])
+        self.assertEqual(self.s.tree(), [])
+        self.s.restore(self.a['id'])
+        self.assertEqual([n['text'] for n in self.s.tree()], ['H', 'a'])
+        self.assertTrue(self.s.get(self.b['id'])['archived_at'])  # siblings archived with H stay archived
+
+    def test_restore_does_not_drag_along_children_archived_earlier(self):
+        k = self.s.create(parent_id=self.b['id'], text='old kid')
+        self.s.delete(k['id'])  # archived first, separately
+        self.s.conn.execute("UPDATE nodes SET archived_at='2026-01-01T00:00:00.000-04:00' WHERE id=?", (k['id'],))
+        self.s.conn.commit()
+        self.s.delete(self.b['id'])
+        self.s.restore(self.b['id'])
+        self.assertEqual(self.texts(self.b['id']), [])

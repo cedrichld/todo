@@ -33,10 +33,14 @@ class Api(unittest.TestCase):
         self.assertEqual(moved['position'], 0)
         self.assertEqual(self.call('DELETE', f"/api/nodes/{pair[1]['id']}")['hard'], False)
         self.assertEqual(len(self.call('GET', '/api/tree')['nodes']), 2)
-        self.assertEqual(self.call('POST', '/api/archive-done', {})['archived'], 1)
+        arch = self.call('POST', '/api/archive-done', {})
+        self.assertEqual((arch['archived'], arch['ids']), (1, [t['id']]))
         self.assertEqual(len(self.call('GET', '/api/done')['days']), 1)
         self.assertTrue(self.call('GET', '/api/history', q='hello')['rows'])
         self.assertEqual(self.call('GET', '/api/search', q='zzz')['nodes'], [])
+        self.assertIsNone(self.call('POST', f"/api/nodes/{t['id']}/restore", {})['archived_at'])
+        self.assertEqual(self.call('DELETE', f"/api/nodes/{t['id']}", hard='1')['hard'], True)
+        self.assertFalse(self.call('GET', '/api/history', q='hello')['rows'])  # hard delete drops history
         self.assertIsNone(self.call('GET', '/api/nope'))
 
 

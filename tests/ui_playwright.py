@@ -7,11 +7,11 @@ Start a server on a *copy* of the db, then run this with a Python that has Playw
 
 It types into the page like a user would and checks the API after each keystroke.
 """
-import asyncio, json, sys, urllib.request
+import asyncio, json, os, sys, urllib.request
 from playwright.async_api import async_playwright
 import os, tempfile
 SP = os.environ.get('UI_SHOTS', tempfile.gettempdir())  # where screenshots go
-URL = 'http://127.0.0.1:5799/'
+URL = f"http://127.0.0.1:{os.environ.get('UI_PORT', '5799')}/"
 def tree():
     nodes = json.load(urllib.request.urlopen(URL + 'api/tree'))['nodes']
     return {n['id']: n for n in nodes}
@@ -23,11 +23,12 @@ def check(name, cond, detail=''):
 
 async def main():
     async with async_playwright() as p:
-        b = await p.chromium.launch()
+        b = await getattr(p, os.environ.get('BROWSER', 'chromium')).launch()
         pg = await b.new_page(viewport={'width': 1100, 'height': 900})
+        pg.set_default_timeout(8000)
         errors = []
         pg.on('console', lambda m: errors.append(f'{m.type}: {m.text}') if m.type in ('error', 'warning') else None)
-        pg.on('pageerror', lambda e: errors.append(f'pageerror: {e}'))
+        pg.on('pageerror', lambda e: (errors.append(f'pageerror: {e}'), logs.append(f'PAGEERROR {e}\n{e.stack}')))
         await pg.goto(URL); await pg.wait_for_selector('.node')
         logs = []; pg.on('console', lambda m: logs.append(f'{m.type}: {m.text}'))
         await pg.evaluate("""() => { for (const k of ['done','move','patch','split','del']) { const o = api[k]; api[k] = (...a) => { console.log('API', k, JSON.stringify(a)); return o(...a).then(r => r, e => { console.log('ERR', k, e.message); throw e; }); }; }
@@ -157,6 +158,76 @@ async def main():
         check('drag reorders', tree()[src['id']]['position'] > tree()[dst['id']]['position'], (tree()[src['id']]['position'], tree()[dst['id']]['position']))
         check('status dot saved', await pg.evaluate('document.querySelector("#status").className') == 'saved')
         await pg.screenshot(path=f'{SP}/ui-final.png')
+        # ================= undo / redo, robust Tab, moving between sections
+        first = by_text(tree(), 'first career task')
+        await pg.locator(f'.node[data-id="{first["id"]}"] > .row > .text').click(); await pg.keyboard.press('End')
+        await pg.keyboard.type(' more'); await pg.wait_for_timeout(700)
+        check('typed suffix saved', tree()[first['id']]['text'] == 'first career task more')
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('Ctrl+Z undoes typing', tree()[first['id']]['text'] == 'first career task', tree()[first['id']]['text'])
+        await pg.keyboard.press('Control+y'); await pg.wait_for_timeout(500)
+        check('Ctrl+Y redoes typing', tree()[first['id']]['text'] == 'first career task more')
+        await pg.keyboard.press('Control+Shift+Digit1'); await pg.wait_for_timeout(300)
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('Ctrl+Z undoes priority', tree()[first['id']]['priority'] == 'none')
+        await pg.keyboard.press('Control+Enter'); await pg.wait_for_timeout(300)
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('Ctrl+Z undoes done', not tree()[first['id']]['done_at'])
+        await pg.locator(f'.node[data-id="{first["id"]}"] > .row > .text').click(); await pg.keyboard.press('End')
+        await pg.keyboard.press('Enter'); await pg.wait_for_timeout(400); await pg.keyboard.type('second'); await pg.wait_for_timeout(700)
+        second = by_text(tree(), 'second'); cnt = len(tree())
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('undo typing in the new item', tree()[second['id']]['text'] == '', tree()[second['id']]['text'])
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('undo new item removes it', len(tree()) == cnt - 1 and second['id'] not in tree())
+        check('focus returns to the item above', await pg.evaluate('document.activeElement.textContent') == 'first career task more')
+        await pg.keyboard.press('Control+y'); await pg.wait_for_timeout(500)
+        await pg.keyboard.press('Control+y'); await pg.wait_for_timeout(500)
+        tr = tree(); check('redo twice brings the item back with its text', any(x['text'] == 'second' for x in tr.values()) and len(tr) == cnt)
+        second = by_text(tr, 'second')
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .dot').click(); await pg.wait_for_timeout(200)
+        await pg.keyboard.press('Escape'); await pg.wait_for_timeout(100)
+        await pg.keyboard.press('Tab'); await pg.wait_for_timeout(500)
+        check('Tab with focus on a button still nests', tree()[second['id']]['parent_id'] == first['id'], tree()[second['id']]['parent_id'])
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('Ctrl+Z undoes nesting', tree()[second['id']]['parent_id'] == first['parent_id'])
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .text').click()
+        await pg.keyboard.press('Alt+ArrowDown'); await pg.wait_for_timeout(500)
+        job = by_text(tree(), 'Job Search'); career = by_text(tree(), 'Career')
+        check('Alt+Down at the section end hops out below the heading', tree()[second['id']]['parent_id'] == job['id'] and tree()[second['id']]['position'] == career['position'] + 1, (tree()[second['id']]['parent_id'], job['id']))
+        await pg.keyboard.press('Alt+ArrowUp'); await pg.wait_for_timeout(500)
+        check('Alt+Up from below a heading hops into its end', tree()[second['id']]['parent_id'] == career['id'], tree()[second['id']]['parent_id'])
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row').hover()
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .menu').click(); await pg.wait_for_timeout(200)
+        await pg.locator('#popover .menu-list button', has_text='Move to section').click(); await pg.wait_for_timeout(300)
+        await pg.keyboard.type('leet'); await pg.wait_for_timeout(200); await pg.keyboard.press('Enter'); await pg.wait_for_timeout(500)
+        leet = by_text(tree(), 'Leetcode')
+        check('Move to section… via menu', tree()[second['id']]['parent_id'] == leet['id'], tree()[second['id']]['parent_id'])
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('Ctrl+Z undoes the section move', tree()[second['id']]['parent_id'] == career['id'])
+        cpp = by_text(tree(), 'Learning')  # the root section right below Job Search, so no scrolling mid-drag
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row').hover()
+        rh2 = (await pg.locator(f'.node[data-id="{cpp["id"]}"] > .row').bounding_box())['height']
+        await pg.drag_and_drop(f'.node[data-id="{second["id"]}"] > .row > .handle', f'.node[data-id="{cpp["id"]}"] > .row', target_position={'x': 200, 'y': rh2 - 4}); await pg.wait_for_timeout(500)
+        check('drop on a heading moves into it as first child', tree()[second['id']]['parent_id'] == cpp['id'] and tree()[second['id']]['position'] == 0, (tree()[second['id']]['parent_id'], tree()[second['id']]['position']))
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(500)
+        check('Ctrl+Z undoes the drop', tree()[second['id']]['parent_id'] == career['id'])
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row').hover()
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .menu').click(); await pg.wait_for_timeout(200)
+        await pg.locator('#popover .menu-list button', has_text='Archive').click(); await pg.wait_for_timeout(500)
+        check('menu archive removes the item', second['id'] not in tree())
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(600)
+        tr = tree(); check('Ctrl+Z restores the archived item in place', second['id'] in tr and tr[second['id']]['parent_id'] == career['id'] and tr[second['id']]['position'] == tr[first['id']]['position'] + 1)
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .check').click(); await pg.wait_for_timeout(400)
+        await pg.click('#archive-done'); await pg.wait_for_timeout(600)
+        check('Archive done removes it', second['id'] not in tree())
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(700)
+        tr = tree(); check('Ctrl+Z restores archived-done item, still done', second['id'] in tr and bool(tr[second['id']]['done_at']))
+        await pg.locator(f'.node[data-id="{second["id"]}"] > .row > .text').click()
+        await pg.keyboard.press('Control+/'); await pg.wait_for_timeout(300)
+        check('Ctrl+/ opens the section picker', await pg.locator('#popover .section-picker').is_visible())
+        await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
+        check('Escape closes it', await pg.locator('#popover').is_hidden())
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))
@@ -164,7 +235,7 @@ async def main():
         await b.close()
         print('\n'.join(l for l in logs if not l.startswith('log: API patch')))
         print('\nconsole errors:', len(errors)); [print('  ', e[:200]) for e in errors[:15]]
-        print('first history row:', first[:120] if first else None)
+        print('first history row:', str(first)[:120] if first else None)
         fails = [n for n, ok in checks if not ok]
         print(f'\n{len(checks) - len(fails)}/{len(checks)} checks passed'); 
         if fails: print('FAILED:', fails)

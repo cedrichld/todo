@@ -44,7 +44,8 @@ const api = {
   done: (id, done) => api.req('POST', `/api/nodes/${id}/done`, { done }),
   move: (id, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/move`, { parent_id, after_id }),
   split: (id, at, text, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/split`, { at, text, parent_id, after_id }),
-  del: id => api.req('DELETE', `/api/nodes/${id}`),
+  del: (id, hard) => api.req('DELETE', `/api/nodes/${id}${hard ? '?hard=1' : ''}`),
+  restore: (id, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/restore`, parent_id === undefined ? {} : { parent_id, after_id }),
   archiveDone: () => api.req('POST', '/api/archive-done', {}),
   doneLog: () => api.req('GET', '/api/done'),
   history: q => api.req('GET', `/api/history?q=${encodeURIComponent(q)}`),
@@ -75,18 +76,18 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
-  nodes: new Map(), kids: new Map(), drag: null, query: '',
+  nodes: new Map(), kids: new Map(), drag: null, query: '', current: null,
   view: localStorage.getItem('view') || 'all',
   hideDone: localStorage.getItem('hideDone') === '1',
 };
-function setNodes(list) { S.nodes = new Map(list.map(n => [n.id, n])); index(); }
+function setNodes(list) { S.nodes = new Map(list.map(n => [n.id, n])); for (const n of S.nodes.values()) n._saved = n.text; index(); }
 function index() {
   S.kids = new Map();
   for (const n of S.nodes.values()) { if (!S.kids.has(n.parent_id)) S.kids.set(n.parent_id, []); S.kids.get(n.parent_id).push(n); }
   for (const a of S.kids.values()) a.sort((x, y) => x.position - y.position || x.id - y.id);
 }
 const kidsOf = id => S.kids.get(id) || [];
-const nodeOf = el => S.nodes.get(+el.closest('.node').dataset.id);
+const nodeOf = el => { const x = el?.closest?.('.node'); return x ? S.nodes.get(+x.dataset.id) : null; };
 function pathOf(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn) break; if (pn.kind === 'heading') out.unshift(pn.text); p = pn.parent_id; } return out; }
 function isDescendant(n, ancestor) { let p = n.parent_id; while (p != null) { if (p === ancestor.id) return true; p = S.nodes.get(p)?.parent_id; } return false; }
 function treeOrder() { const m = new Map(); let i = 0; (function walk(pid) { for (const n of kidsOf(pid)) { m.set(n.id, i++); walk(n.id); } })(null); return m; }
@@ -225,6 +226,8 @@ function flushText(id) {
   clearTimeout(textTimers.get(id)); textTimers.delete(id);
   const n = S.nodes.get(id); if (!n) return;
   const text = n.text;
+  if (text === n._saved) return;
+  pushTextUndo(id, n._saved, text); n._saved = text;
   queue.run(() => api.patch(id, { text })).catch(showError);
 }
 function onPaste(e) {
@@ -247,75 +250,192 @@ async function refresh(focus) {
   if (focus && focus.id != null) focusNode(focus.id, focus.caret);
 }
 
+// ---------------------------------------------------------------- undo / redo
+// Every change pushes its inverse. Ids of nodes re-created by redo are remapped through idMap.
+const undoState = { stack: [], redo: [], idMap: new Map(), max: 300 };
+const rid = id => { if (id == null) return null; const seen = new Set(); while (undoState.idMap.has(id) && !seen.has(id)) { seen.add(id); id = undoState.idMap.get(id); } return id; };
+// A live id never redirects anywhere (sqlite may hand a re-created node the id it had before), so no self-loops or cycles.
+const remap = (oldId, newId) => { undoState.idMap.delete(newId); if (oldId !== newId) undoState.idMap.set(oldId, newId); };
+function pushUndo(entry) {
+  entry.t = Date.now();
+  const top = undoState.stack.at(-1);
+  if (top && entry.type === 'patch' && top.type === 'patch' && top.id === entry.id && !undoState.redo.length
+      && entry.t - top.t < 1500 && Object.keys(top.new).join() === Object.keys(entry.new).join()) { top.new = entry.new; top.t = entry.t; return; }
+  undoState.stack.push(entry);
+  if (undoState.stack.length > undoState.max) undoState.stack.shift();
+  undoState.redo.length = 0;
+}
+function pushTextUndo(id, oldText, newText) {
+  const top = undoState.stack.at(-1);
+  if (top && top.type === 'text' && top.id === id && !undoState.redo.length && Date.now() - top.t < 2500) { top.new = newText; top.t = Date.now(); return; }
+  pushUndo({ type: 'text', id, old: oldText, new: newText, label: 'typing' });
+}
+async function restoreAt(id, parent_id, after_id) {
+  const p = rid(parent_id), a = rid(after_id);
+  try { await api.restore(id, p, a); }
+  catch (err) { if (!(err.status < 500)) throw err; try { await api.restore(id, p, null); } catch (e2) { await api.restore(id); } }
+}
+async function applyEntry(e, dir) {
+  const id = rid(e.id);
+  switch (e.type) {
+    case 'text': await api.patch(id, { text: dir === 'undo' ? e.old : e.new }); return { id, caret: 'end' };
+    case 'patch': {
+      const vals = dir === 'undo' ? e.old : e.new, fields = {};
+      for (const k of Object.keys(vals)) if (k !== 'done_at') fields[k] = vals[k];
+      await api.patch(id, fields);
+      if ('done_at' in vals) await api.done(id, !!vals.done_at);
+      return { id, caret: 'end' };
+    }
+    case 'done': await api.done(id, dir === 'undo' ? !e.done : e.done); return { id, caret: 'end' };
+    case 'move': { const to = dir === 'undo' ? e.from : e.to; await api.move(id, rid(to.parent_id), rid(to.after_id)); return { id, caret: 'end' }; }
+    case 'create':
+      if (dir === 'undo') { await api.del(id, true); return e.parent_id != null ? { id: rid(e.parent_id), caret: 'end' } : null; }
+      { const r = await api.create({ parent_id: rid(e.parent_id), after_id: rid(e.after_id), kind: e.kind, text: e.text }); remap(e.id, r.id); return { id: r.id, caret: 'end' }; }
+    case 'hardDelete':
+      if (dir === 'undo') { const r = await api.create({ parent_id: rid(e.parent_id), after_id: rid(e.after_id), kind: e.kind, text: e.text }); remap(e.id, r.id); return { id: r.id, caret: 'end' }; }
+      await api.del(id, true); return null;
+    case 'split':
+      if (dir === 'undo') { await api.del(rid(e.tail), true); await api.patch(id, { text: e.full }); return { id, caret: e.at }; }
+      { const r = await api.split(id, e.at, e.full, rid(e.parent_id), rid(e.after_id)); remap(e.tail, r.nodes[1].id); return { id: r.nodes[1].id, caret: 0 }; }
+    case 'archive':
+      if (dir === 'undo') { await restoreAt(id, e.parent_id, e.after_id); return { id, caret: 'end' }; }
+      await api.del(id); return null;
+    case 'archiveDone':
+      if (dir === 'undo') { for (const p of e.places) await restoreAt(rid(p.id), p.parent_id, p.after_id); return null; }
+      { const r = await api.archiveDone(); e.places = e.places.filter(p => r.ids.includes(rid(p.id))); return null; }
+  }
+  return null;
+}
+async function runUndo(dir) {
+  for (const id of [...textTimers.keys()]) flushText(id);
+  const from = dir === 'undo' ? undoState.stack : undoState.redo, to = dir === 'undo' ? undoState.redo : undoState.stack;
+  const e = from.pop();
+  if (!e) return toast(dir === 'undo' ? 'Nothing to undo' : 'Nothing to redo');
+  let focus = null;
+  try { focus = await queue.run(() => applyEntry(e, dir)); } catch (err) { showError(err); return; }
+  to.push(e);
+  if (S.view !== 'all') focus = null;
+  await refresh(focus);
+  toast(`${dir === 'undo' ? 'Undid' : 'Redid'}: ${e.label || e.type}`);
+}
+
 // ---------------------------------------------------------------- operations
+function placeOf(n) { const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n); return { parent_id: n.parent_id, after_id: i > 0 ? sibs[i - 1].id : null }; }
+function patchFields(n, fields, label) {
+  const old = {}, nu = {};
+  for (const k of Object.keys(fields)) { old[k] = n[k]; nu[k] = fields[k]; }
+  if (fields.kind === 'heading') { for (const k of ['priority', 'due_date', 'due_slot', 'done_at']) old[k] = n[k]; Object.assign(n, { priority: 'none', due_date: null, due_slot: null, done_at: null }); }
+  Object.assign(n, fields);
+  pushUndo({ type: 'patch', id: n.id, old, new: nu, label });
+  return queue.run(() => api.patch(n.id, fields));
+}
 function toggleDone(n) {
   if (n.kind !== 'task') return;
   const done = !n.done_at;
   n.done_at = done ? new Date().toISOString() : null; patchNodeDom(n);
+  pushUndo({ type: 'done', id: n.id, done, label: done ? 'done' : 'not done' });
   queue.run(() => api.done(n.id, done)).then(r => { Object.assign(n, r); patchNodeDom(n); if (S.hideDone || S.view !== 'all') render(); }).catch(showError);
 }
-function setPriority(n, p) {
-  if (n.kind !== 'task') return;
-  n.priority = p; n.color = null; patchNodeDom(n);
-  queue.run(() => api.patch(n.id, { priority: p, color: null })).catch(showError);
-}
-function setColor(n, hex) {
-  n.color = hex; patchNodeDom(n);
-  queue.run(() => api.patch(n.id, { color: hex })).catch(showError);
-}
-function setDue(n, date, slot) {
-  n.due_date = date; n.due_slot = date ? slot : null; patchNodeDom(n);
-  queue.run(() => api.patch(n.id, { due_date: n.due_date, due_slot: n.due_slot })).catch(showError);
-}
+function setPriority(n, p) { if (n.kind !== 'task') return; patchFields(n, { priority: p, color: null }, 'priority').catch(showError); patchNodeDom(n); }
+function setColor(n, hex) { patchFields(n, { color: hex }, 'color').catch(showError); patchNodeDom(n); }
+function setDue(n, date, slot) { patchFields(n, { due_date: date, due_slot: date ? slot : null }, 'due date').catch(showError); patchNodeDom(n); }
 function toggleFold(n) {
   n.collapsed = n.collapsed ? 0 : 1; render();
   queue.run(() => api.patch(n.id, { collapsed: !!n.collapsed })).catch(showError);
 }
-function toggleKind(n, caret) {
-  return structural(() => api.patch(n.id, { kind: n.kind === 'task' ? 'heading' : 'task' }), { id: n.id, caret });
+async function toggleKind(n, caret) {
+  for (const id of [...textTimers.keys()]) flushText(id);
+  try { await patchFields(n, { kind: n.kind === 'task' ? 'heading' : 'task' }, 'heading/task'); } catch (e) { showError(e); return; }
+  await refresh({ id: n.id, caret });
 }
 function enterAt(n, t) {
   const at = caretOffset(t), text = t.textContent;
   let parent_id = n.parent_id, after_id = n.id;
   if (n.kind === 'heading' || (kidsOf(n.id).length && !n.collapsed)) { parent_id = n.id; after_id = null; }
-  textTimers.delete(n.id);  // the split carries the current text; drop the pending patch
-  return structural(() => api.split(n.id, at, text, parent_id, after_id), r => ({ id: r.nodes[1].id, caret: 0 }));
+  if (textTimers.has(n.id)) { clearTimeout(textTimers.get(n.id)); textTimers.delete(n.id); }
+  if (text !== n._saved) { pushTextUndo(n.id, n._saved, text); n._saved = text; }  // the split carries the text
+  return structural(() => api.split(n.id, at, text, parent_id, after_id), r => {
+    pushUndo({ type: 'split', id: n.id, tail: r.nodes[1].id, at, full: text, parent_id, after_id, label: 'new item' });
+    return { id: r.nodes[1].id, caret: 0 };
+  });
 }
 function deleteNode(n) {
-  const prev = neighborId(n.id, -1);
-  return structural(() => api.del(n.id), prev != null ? { id: prev, caret: 'end' } : null);
+  const prev = neighborId(n.id, -1), place = placeOf(n), snap = { kind: n.kind, text: n.text };
+  return structural(() => api.del(n.id), r => {
+    if (r.hard) pushUndo({ type: 'hardDelete', id: n.id, ...place, ...snap, label: 'delete' });
+    else pushUndo({ type: 'archive', id: n.id, ...place, label: 'archive' });
+    return prev != null ? { id: prev, caret: 'end' } : null;
+  });
+}
+function moveNode(n, parent_id, after_id, caret, before) {
+  const from = placeOf(n);
+  if (from.parent_id === parent_id && from.after_id === after_id) return;
+  return structural(async () => { if (before) await before(); return api.move(n.id, parent_id, after_id); }, () => {
+    pushUndo({ type: 'move', id: n.id, from, to: { parent_id, after_id }, label: 'move' });
+    return { id: n.id, caret: caret ?? 'end' };
+  });
 }
 function indent(n, caret) {
-  const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n); if (i <= 0) return;
+  const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n); if (i <= 0) return toast('Nothing above to nest under');
   const prev = sibs[i - 1], last = kidsOf(prev.id).at(-1);
-  return structural(async () => { if (prev.collapsed) await api.patch(prev.id, { collapsed: false }); return api.move(n.id, prev.id, last ? last.id : null); }, { id: n.id, caret });
+  return moveNode(n, prev.id, last ? last.id : null, caret, prev.collapsed ? () => api.patch(prev.id, { collapsed: false }) : null);
 }
 function outdent(n, caret) {
-  const p = S.nodes.get(n.parent_id); if (!p) return;
-  return structural(() => api.move(n.id, p.parent_id, p.id), { id: n.id, caret });
+  const p = S.nodes.get(n.parent_id); if (!p) return toast('Already at the top level');
+  return moveNode(n, p.parent_id, p.id, caret);
 }
+// Alt+↑/↓: swap with a sibling; at the edge of a section, hop into the neighbouring section.
 function moveVert(n, dir, caret) {
-  const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n);
-  let after;
-  if (dir < 0) { if (i <= 0) return; after = i >= 2 ? sibs[i - 2].id : null; }
-  else { if (i >= sibs.length - 1) return; after = sibs[i + 1].id; }
-  return structural(() => api.move(n.id, n.parent_id, after), { id: n.id, caret });
+  const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n), p = S.nodes.get(n.parent_id);
+  const intoEnd = h => moveNode(n, h.id, kidsOf(h.id).at(-1)?.id ?? null, caret, h.collapsed ? () => api.patch(h.id, { collapsed: false }) : null);
+  const intoTop = h => moveNode(n, h.id, null, caret, h.collapsed ? () => api.patch(h.id, { collapsed: false }) : null);
+  if (dir < 0) {
+    if (i > 0) { const prev = sibs[i - 1]; return prev.kind === 'heading' && n.kind !== 'heading' ? intoEnd(prev) : moveNode(n, n.parent_id, i >= 2 ? sibs[i - 2].id : null, caret); }
+    if (!p) return;
+    const ps = kidsOf(p.parent_id), pi = ps.indexOf(p), prev = ps[pi - 1];
+    if (prev && prev.kind === 'heading' && n.kind !== 'heading') return intoEnd(prev);
+    return moveNode(n, p.parent_id, pi >= 1 ? ps[pi - 1].id : null, caret);
+  }
+  if (i < sibs.length - 1) { const next = sibs[i + 1]; return next.kind === 'heading' && n.kind !== 'heading' ? intoTop(next) : moveNode(n, n.parent_id, next.id, caret); }
+  if (!p) return;
+  const ps = kidsOf(p.parent_id), pi = ps.indexOf(p), next = ps[pi + 1];
+  if (next && next.kind === 'heading' && n.kind !== 'heading') return intoTop(next);
+  return moveNode(n, p.parent_id, p.id, caret);
 }
+function moveToSection(n, h) { return moveNode(n, h.id, kidsOf(h.id).at(-1)?.id ?? null, 'end', h.collapsed ? () => api.patch(h.id, { collapsed: false }) : null); }
 function archiveAllDone() {
-  structural(() => api.archiveDone()).then(r => { if (r) toast(`Archived ${r.archived} done task${r.archived === 1 ? '' : 's'}`); });
+  const order = treeOrder();
+  const places = [...S.nodes.values()].filter(x => x.kind === 'task' && x.done_at).sort((a, b) => order.get(a.id) - order.get(b.id)).map(x => ({ id: x.id, ...placeOf(x) }));
+  structural(() => api.archiveDone()).then(r => {
+    if (!r) return;
+    if (r.ids.length) pushUndo({ type: 'archiveDone', places: places.filter(p => r.ids.includes(p.id)), label: 'archive done' });
+    toast(`Archived ${r.archived} done task${r.archived === 1 ? '' : 's'}`);
+  });
+}
+function newRoot() {
+  const last = kidsOf(null).at(-1), after_id = last ? last.id : null;
+  structural(() => api.create({ parent_id: null, after_id, kind: 'heading', text: '' }), r => {
+    pushUndo({ type: 'create', id: r.id, parent_id: null, after_id, kind: 'heading', text: '', label: 'new section' });
+    return { id: r.id, caret: 0 };
+  });
 }
 
 // ---------------------------------------------------------------- keyboard
+const currentNode = () => S.current != null ? S.nodes.get(S.current) : null;
 function onKey(e) {
   const t = e.target; if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
+  S.current = n.id;
   const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
   const caret = () => caretOffset(t);
   if (e.key === 'Escape') { closePopover(); t.blur(); return; }
+  if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
+  if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (e.key === 'Enter' && ctrl) { e.preventDefault(); return toggleDone(n); }
   if (ctrl && e.shiftKey && /^Digit[0-4]$/.test(e.code)) { e.preventDefault(); return setPriority(n, ['none', 'urgent', 'soon', 'normal', 'later'][+e.code.slice(5)]); }
   if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); return openPopover($(':scope > .row > .chip', t.closest('.node')) || t, duePicker(n)); }
   if (ctrl && e.shiftKey && e.key.toLowerCase() === 'h') { e.preventDefault(); return toggleKind(n, caret()); }
+  if (ctrl && e.key === '/') { e.preventDefault(); return openPopover($(':scope > .row > .menu', t.closest('.node')) || t, sectionPicker(n)); }
   if (!outline) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); return enterAt(n, t); }
   if (e.key === 'Backspace' && t.textContent === '') { e.preventDefault(); return deleteNode(n); }
@@ -323,6 +443,23 @@ function onKey(e) {
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, caret()); }
   if (e.key === 'ArrowUp' && !e.shiftKey && caretEdge(t).first) { const id = neighborId(n.id, -1); if (id != null) { e.preventDefault(); focusNode(id, 'end'); } return; }
   if (e.key === 'ArrowDown' && !e.shiftKey && caretEdge(t).last) { const id = neighborId(n.id, 1); if (id != null) { e.preventDefault(); focusNode(id, 0); } return; }
+}
+// Keys that must work even when focus is on a checkbox / button / nothing (Firefox lands there after clicks).
+function onGlobalKey(e) {
+  if (e.defaultPrevented) return;
+  const ctrl = e.ctrlKey || e.metaKey, ae = document.activeElement, tag = ae?.tagName;
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || ae?.isContentEditable;
+  if (ctrl && e.key.toLowerCase() === 'k') { e.preventDefault(); const s = $('#search'); s.focus(); s.select(); return; }
+  if (e.key === 'Escape') { closePopover(); return; }
+  if (typing && ae !== document.body) return;
+  if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
+  if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
+  if (ae && ae !== document.body && !$('#view').contains(ae)) return;  // top bar buttons keep their normal Tab behaviour
+  const n = nodeOf(ae) || currentNode();
+  if (!n || S.view !== 'all') return;
+  if (e.key === 'Tab' && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return e.shiftKey ? outdent(n, 'end') : indent(n, 'end'); }
+  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, 'end'); }
+  if (ctrl && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }
 }
 
 // ---------------------------------------------------------------- popovers
@@ -393,12 +530,41 @@ function duePicker(n) {
   draw();
   return box;
 }
+// "Move to section…": every heading, filterable; Enter picks the first match.
+function sectionPicker(n) {
+  const box = document.createElement('div'); box.className = 'menu-list section-picker';
+  const input = document.createElement('input'); input.type = 'search'; input.placeholder = 'Move to section…'; input.className = 'section-filter';
+  const list = document.createElement('div'); list.className = 'section-list';
+  box.append(input, list);
+  const order = treeOrder();
+  const heads = [...S.nodes.values()].filter(h => h.kind === 'heading' && h.id !== n.id && !isDescendant(h, n)).sort((a, b) => order.get(a.id) - order.get(b.id));
+  const draw = () => {
+    list.innerHTML = '';
+    const q = input.value.trim().toLowerCase();
+    for (const h of heads) {
+      const label = [...pathOf(h), h.text || '(untitled)'].join(' › ');
+      if (q && !label.toLowerCase().includes(q)) continue;
+      const b = document.createElement('button'); b.textContent = label;
+      if (h.id === n.parent_id) b.classList.add('current');
+      b.onclick = () => { closePopover(); moveToSection(n, h); };
+      list.appendChild(b);
+    }
+    if (!list.children.length) { const p = document.createElement('div'); p.className = 'none'; p.textContent = 'No section matches'; list.appendChild(p); }
+  };
+  input.oninput = draw;
+  input.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); $('button', list)?.click(); } else if (e.key === 'Escape') closePopover(); };
+  draw();
+  setTimeout(() => input.focus(), 0);
+  return box;
+}
 function nodeMenu(n) {
   const box = document.createElement('div'); box.className = 'menu-list';
+  const anchor = () => $(`.node[data-id="${n.id}"] > .row > .menu`);
   const caret = () => { const t = $(`.node[data-id="${n.id}"] > .row > .text`); return t ? t.textContent.length : 0; };
   const items = [
-    ['Indent', 'Tab', () => indent(n, caret())],
-    ['Outdent', 'Shift+Tab', () => outdent(n, caret())],
+    ['Move to section…', 'Ctrl+/', () => openPopover(anchor() || document.body, sectionPicker(n)), true],
+    ['Nest under item above', 'Tab', () => indent(n, caret())],
+    ['Un-nest', 'Shift+Tab', () => outdent(n, caret())],
     ['Move up', 'Alt+↑', () => moveVert(n, -1, caret())],
     ['Move down', 'Alt+↓', () => moveVert(n, 1, caret())],
     null,
@@ -409,10 +575,10 @@ function nodeMenu(n) {
   ];
   for (const it of items) {
     if (it === null) { box.appendChild(document.createElement('hr')); continue; }
-    const [label, key, fn] = it;
+    const [label, key, fn, keepOpen] = it;
     const b = document.createElement('button'); b.innerHTML = `<span></span><kbd></kbd>`;
     b.firstChild.textContent = label; b.lastChild.textContent = key;
-    b.onclick = () => { closePopover(); fn(); };
+    b.onclick = () => { if (!keepOpen) closePopover(); fn(); };
     box.appendChild(b);
   }
   return box;
@@ -421,10 +587,12 @@ function helpPanel() {
   const box = document.createElement('div'); box.className = 'help';
   const rows = [
     ['Enter', 'New item below (splits at cursor)'], ['Backspace on empty', 'Delete item'],
-    ['Tab / Shift+Tab', 'Nest / un-nest'], ['Alt+↑ / Alt+↓', 'Move item up / down'],
+    ['Tab / Shift+Tab', 'Nest under the item above / un-nest'], ['Alt+↑ / Alt+↓', 'Move up / down (hops into the next section at the edge)'],
+    ['Ctrl+/', 'Move to another section'], ['Drag ⋮⋮', 'Reorder; drop on a section title to move into it'],
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
     ['Ctrl+Shift+1 2 3 4', 'Urgent / Soon / Normal / Later'], ['Ctrl+Shift+0', 'No priority'],
-    ['Ctrl+D', 'Due date'], ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+K', 'Search'], ['Esc', 'Close / unfocus'],
+    ['Ctrl+D', 'Due date'], ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
+    ['Ctrl+K', 'Search'], ['Esc', 'Close / unfocus'],
   ];
   box.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>';
   return box;
@@ -436,13 +604,14 @@ function onClick(e) {
   if (!btn || !$('#view').contains(btn)) return;
   const nodeEl = btn.closest('.node'); if (!nodeEl) return;
   const n = nodeOf(btn); if (!n) return;
+  S.current = n.id;
   if (btn.classList.contains('fold')) return toggleFold(n);
   if (btn.classList.contains('dot')) return openPopover(btn, priorityPicker(n));
   if (btn.classList.contains('chip')) return openPopover(btn, duePicker(n));
   if (btn.classList.contains('menu')) return openPopover(btn, nodeMenu(n));
 }
 function onChange(e) { if (e.target.classList?.contains('check')) { const n = nodeOf(e.target); if (n) toggleDone(n); } }
-function clearDropMarks() { $$('.row.drop-before, .row.drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after')); }
+function clearDropMarks() { $$('.row.drop-before, .row.drop-after, .row.drop-into').forEach(r => r.classList.remove('drop-before', 'drop-after', 'drop-into')); }
 function onDragStart(e) {
   const h = e.target.closest?.('.handle'); if (!h) { e.preventDefault(); return; }
   S.drag = +h.closest('.node').dataset.id;
@@ -452,20 +621,23 @@ function onDragStart(e) {
 function onDragOver(e) {
   const row = e.target.closest?.('.row'); if (!row || S.drag == null) return;
   e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-  const r = row.getBoundingClientRect();
-  clearDropMarks(); row.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+  const r = row.getBoundingClientRect(), target = nodeOf(row);
+  clearDropMarks();
+  if (e.clientY < r.top + r.height / 2) row.classList.add('drop-before');
+  else row.classList.add(target && target.kind === 'heading' ? 'drop-into' : 'drop-after');
 }
 function onDrop(e) {
   const row = e.target.closest?.('.row'); if (!row || S.drag == null) return;
   e.preventDefault();
-  const before = row.classList.contains('drop-before');
+  const mode = row.classList.contains('drop-before') ? 'before' : row.classList.contains('drop-into') ? 'into' : 'after';
   const target = nodeOf(row), dragged = S.nodes.get(S.drag);
   onDragEnd();
   if (!target || !dragged || target.id === dragged.id || isDescendant(target, dragged)) return;
+  if (mode === 'into') return moveNode(dragged, target.id, null, 'end', target.collapsed ? () => api.patch(target.id, { collapsed: false }) : null);
   const sibs = kidsOf(target.parent_id), i = sibs.indexOf(target);
-  const after = before ? (i > 0 ? sibs[i - 1].id : null) : target.id;
+  const after = mode === 'before' ? (i > 0 ? sibs[i - 1].id : null) : target.id;
   if (after === dragged.id) return;
-  structural(() => api.move(dragged.id, target.parent_id, after));
+  moveNode(dragged, target.parent_id, after, 'end');
 }
 function onDragEnd() { S.drag = null; clearDropMarks(); $$('.node.dragging').forEach(el => el.classList.remove('dragging')); }
 
@@ -540,7 +712,10 @@ function boot() {
   view.addEventListener('paste', onPaste);
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
+  view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el) S.current = +el.dataset.id; });
+  view.addEventListener('mousedown', e => { const el = e.target.closest?.('.node'); if (el) S.current = +el.dataset.id; });
   view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); });
+  view.addEventListener('beforeinput', e => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); runUndo(e.inputType === 'historyUndo' ? 'undo' : 'redo'); } });
   view.addEventListener('dragstart', onDragStart);
   view.addEventListener('dragover', onDragOver);
   view.addEventListener('drop', onDrop);
@@ -553,10 +728,7 @@ function boot() {
   const search = $('#search');
   let st; search.oninput = () => { clearTimeout(st); st = setTimeout(() => { S.query = search.value; render(); }, 150); };
   search.onkeydown = e => { if (e.key === 'Escape') { search.value = ''; S.query = ''; render(); search.blur(); } };
-  document.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); search.focus(); search.select(); }
-    else if (e.key === 'Escape') closePopover();
-  });
+  document.addEventListener('keydown', onGlobalKey);
   document.addEventListener('mousedown', e => { const pop = $('#popover'); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.dot, .chip, .menu, #help-btn')) closePopover(); });
   window.addEventListener('beforeunload', () => { for (const id of [...textTimers.keys()]) flushText(id); });
   refresh();

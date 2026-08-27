@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS history_ts ON history(ts);
 
 
 def now_iso():
-    return datetime.datetime.now().astimezone().isoformat(timespec='seconds')
+    return datetime.datetime.now().astimezone().isoformat(timespec='milliseconds')
 
 
 def _due_str(n):
@@ -310,11 +310,12 @@ class Store:
             self._log(node_id, 'move', old=_s(n['parent_id']), new=_s(parent_id), ts=ts)
         return self.get(node_id)
 
-    def delete(self, node_id):
-        """Hard-delete an empty node (promoting its children); otherwise archive the subtree."""
+    def delete(self, node_id, hard=False):
+        """Hard-delete an empty node (promoting its children); otherwise archive the subtree.
+        `hard=True` forces a hard delete (used by undo of a create)."""
         with self._tx():
             n = self.get(node_id)
-            if n['text'].strip() == '':
+            if hard or n['text'].strip() == '':
                 kids = self._siblings(node_id)
                 sibs = self._siblings(n['parent_id'])
                 idx = sibs.index(node_id)
@@ -327,8 +328,39 @@ class Store:
             self._renumber(self._siblings(n['parent_id']))
             return {'id': node_id, 'hard': False}
 
+    def restore(self, node_id, parent_id=_UNSET, after_id=_UNSET):
+        """Bring an archived node (and everything archived with it) back; default place = end of its old parent."""
+        with self._tx():
+            n = self.get(node_id)
+            if not n['archived_at']:
+                return n
+            ts = now_iso()
+            if n['parent_id'] is not None:
+                self._unarchive_chain(n['parent_id'], ts)
+            stamp = n['archived_at']
+
+            def revive(nid):
+                self.conn.execute('UPDATE nodes SET archived_at=NULL, updated_at=? WHERE id=?', (ts, nid))
+                self._log(nid, 'restore', ts=ts)
+                kids = self.conn.execute('SELECT id FROM nodes WHERE parent_id=? AND archived_at=? ORDER BY position, id',
+                                         (nid, stamp)).fetchall()
+                for k in kids:
+                    revive(k['id'])
+                self._renumber(self._siblings(nid))
+            revive(node_id)
+            if parent_id is _UNSET:
+                parent_id = n['parent_id']
+            if after_id is _UNSET:
+                sibs = [x for x in self._siblings(parent_id) if x != node_id]
+                after_id = sibs[-1] if sibs else None
+            if parent_id != n['parent_id']:
+                self.conn.execute('UPDATE nodes SET parent_id=? WHERE id=?', (parent_id, node_id))
+                self._renumber(self._siblings(n['parent_id']))
+            self._place(node_id, parent_id, after_id)
+        return self.get(node_id)
+
     def archive_done(self, before=None):
-        """Archive done tasks (with their subtrees) that have no open descendants. Returns count."""
+        """Archive done tasks (with their subtrees) that have no open descendants. Returns their ids."""
         with self._tx():
             sql = "SELECT id, parent_id FROM nodes WHERE archived_at IS NULL AND kind='task' AND done_at IS NOT NULL"
             args = []
@@ -337,17 +369,17 @@ class Store:
                 args.append(before)
             rows = [dict(r) for r in self.conn.execute(sql, args)]
             ts = now_iso()
-            count = 0
+            ids = []
             parents = set()
             for r in rows:
                 if self.get(r['id'])['archived_at'] or self._descendants_open(r['id']):
                     continue
                 self._archive(r['id'], ts)
-                count += 1
+                ids.append(r['id'])
                 parents.add(r['parent_id'])
             for p in parents:
                 self._renumber(self._siblings(p))
-        return count
+        return ids
 
     # ------------------------------------------------------------ queries
     def path(self, node_id):
