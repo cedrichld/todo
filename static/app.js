@@ -1042,6 +1042,26 @@ async function renderHistory(main) {
 }
 
 // ---------------------------------------------------------------- top bar + boot
+// Section rules: ten hand-drawn lines, each a smooth random sample (a barely perturbed GP), redrawn on every load.
+const RULES = { paths: null };
+function gpPath(W = 1200, H = 12, N = 80) {
+  const ls = 120 + Math.random() * 80, amp = 0.75 + Math.random() * 0.35, K = 24;
+  const ws = [], bs = [], cs = [];
+  for (let k = 0; k < K; k++) { const u = Math.random(), v = Math.random(); ws.push(Math.sqrt(-2 * Math.log(u || 1e-9)) * Math.cos(2 * Math.PI * v) / ls); bs.push(Math.random() * 2 * Math.PI); cs.push(Math.sqrt(-2 * Math.log(Math.random() || 1e-9)) * Math.cos(2 * Math.PI * Math.random())); }
+  const xs = Array.from({ length: N }, (_, i) => i * W / (N - 1));
+  let ys = xs.map(x => ws.reduce((acc, w, k) => acc + cs[k] * Math.cos(w * x + bs[k]), 0) * Math.sqrt(2 / K));
+  const mean = ys.reduce((a, b) => a + b, 0) / N; ys = ys.map(y => y - mean);
+  const sd = Math.sqrt(ys.reduce((a, y) => a + y * y, 0) / N) || 1;
+  return { d: 'M' + xs.map((x, i) => `${x.toFixed(0)} ${(H / 2 + amp * ys[i] / sd).toFixed(2)}`).join(' L'), w: (1.05 + Math.random() * 0.2).toFixed(2) };
+}
+function drawRules() {
+  if (!RULES.paths) RULES.paths = Array.from({ length: 10 }, () => gpPath());
+  const dark = document.documentElement.classList.contains('dark'), color = dark ? '%23ece7dc' : '%234a463f', op = dark ? 0.3 : 0.28;
+  RULES.paths.forEach((p, i) => {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 12' preserveAspectRatio='none'><path d='${p.d}' fill='none' stroke='${color}' stroke-opacity='${op}' stroke-width='${p.w}' stroke-linecap='round' stroke-linejoin='round' vector-effect='non-scaling-stroke'/></svg>`;
+    document.documentElement.style.setProperty(`--rule-${i + 1}`, `url("data:image/svg+xml,${encodeURIComponent(svg).replace(/%20/g, ' ')}")`);
+  });
+}
 // Theme: an explicit choice is remembered; otherwise the system setting applies. `.dark` on <html> drives the icon.
 function applyTheme(choice, animate) {
   const root = document.documentElement;
@@ -1050,6 +1070,7 @@ function applyTheme(choice, animate) {
   if (animate) { root.classList.add('theming'); clearTimeout(applyTheme.t); applyTheme.t = setTimeout(() => root.classList.remove('theming'), 400); }
   root.classList.toggle('dark', dark);
   $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  drawRules();
 }
 const VIEWS = ['all', 'today', 'waiting', 'done', 'insights', 'history'];  // history is tucked away: reached from Insights, shown as a tab only while open
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
