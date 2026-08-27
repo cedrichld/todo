@@ -191,3 +191,18 @@ class Structure(StoreTestCase):
         self.assertEqual(self.s.tree(), [])
         self.s.set_done(self.a['id'], False)
         self.assertEqual([n['text'] for n in self.s.tree()], ['H', 'a'])
+
+
+class Mirror(StoreTestCase):
+    def test_markdown_mirror_regenerated_on_every_write(self):
+        h = self.s.create(kind='heading', text='H')
+        with open(self.md) as f:
+            self.assertEqual(f.read(), '# H\n')
+        t = self.s.create(parent_id=h['id'], text='t', priority='soon')
+        self.s.set_done(t['id'], True)
+        with open(self.md) as f:
+            body = f.read()
+        self.assertIn('- [x] t !soon (done ', body)
+        self.s.delete(t['id'])
+        with open(self.md) as f:
+            self.assertEqual(f.read(), '# H\n')
