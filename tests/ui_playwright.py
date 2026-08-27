@@ -24,7 +24,7 @@ def check(name, cond, detail=''):
 async def main():
     async with async_playwright() as p:
         b = await getattr(p, os.environ.get('BROWSER', 'chromium')).launch()
-        pg = await b.new_page(viewport={'width': 1100, 'height': 900})
+        pg = await b.new_page(viewport={'width': 1100, 'height': 1300})  # tall enough that drags do not scroll mid-way at 140%
         pg.set_default_timeout(8000)
         errors = []
         pg.on('console', lambda m: errors.append(f'{m.type}: {m.text}') if m.type in ('error', 'warning') else None)
@@ -156,7 +156,7 @@ async def main():
         src = by_text(tree(), 'IROS Book'); dst = by_text(tree(), 'PhD Apps think through')
         await pg.locator(f'.node[data-id="{src["id"]}"] > .row').hover()
         h = pg.locator(f'.node[data-id="{src["id"]}"] > .row > .handle'); d = pg.locator(f'.node[data-id="{dst["id"]}"] > .row')
-        rh = (await d.bounding_box())['height']; check('task rows are single-line', rh < 34, rh)
+        rh = (await d.bounding_box())['height']; check('task rows are single-line', rh < 48, rh)  # 140% scale
         logs.append('--- drag step')
         await pg.drag_and_drop(f'.node[data-id="{src["id"]}"] > .row > .handle', f'.node[data-id="{dst["id"]}"] > .row', target_position={'x': 200, 'y': rh - 4}); await pg.wait_for_timeout(500)
         check('drag reorders', tree()[src['id']]['position'] > tree()[dst['id']]['position'], (tree()[src['id']]['position'], tree()[dst['id']]['position']))

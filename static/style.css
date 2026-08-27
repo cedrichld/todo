@@ -47,8 +47,9 @@
 /* a short cross-fade when the theme is switched by hand */
 :root.theming, :root.theming *, :root.theming ::before, :root.theming ::after { transition: background-color .35s var(--ease), color .35s var(--ease), border-color .35s var(--ease), box-shadow .35s var(--ease) !important; }
 * { box-sizing: border-box; }
-html { color-scheme: light dark; scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
-body { margin: 0; background: var(--bg) var(--paper-img, url("/paper.jpg")) center top / 700px 700px repeat; background-blend-mode: var(--paper-blend, multiply); color: var(--fg); font-family: var(--serif); font-size: 18px; line-height: 1.45; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; caret-color: var(--accent); }
+html { color-scheme: light dark; scrollbar-width: thin; scrollbar-color: var(--faint) transparent; font-size: 140%; }  /* the whole sheet reads at 140% on a desktop screen */
+@media (max-width: 899px) { html { font-size: 100%; } }
+body { margin: 0; background: var(--bg) var(--paper-img, url("/paper.jpg")) center top / 700px 700px repeat; background-blend-mode: var(--paper-blend, multiply); color: var(--fg); font-family: var(--serif); font-size: 1.125rem; line-height: 1.45; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; caret-color: var(--accent); }
 /* the paper is a real texture tile (static/paper.jpg) multiplied with the theme colour; a faint vignette sits over everything, never in the way */
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 99; background: radial-gradient(ellipse 85% 75% at 50% 45%, transparent 55%, var(--vignette) 135%); }
 /* dense UI — controls, chips, labels, keys, charts — reads in a sans; the words themselves stay in the serif */
@@ -108,7 +109,7 @@ button { cursor: pointer; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--soon) 10%, transparent); } }
 
 /* outline */
-#view { position: relative; max-width: 920px; margin: 0 auto; padding: 1.4rem 1.5rem 8rem; }
+#view { position: relative; max-width: 57.5rem; margin: 0 auto; padding: 1.4rem 1.5rem 8rem; }
 #view > .page { will-change: transform, opacity; }
 .node > .kids { margin-left: 1.5rem; }
 .node.heading > .kids { margin-left: .4rem; }
@@ -275,7 +276,7 @@ table.history { border-collapse: collapse; width: 100%; font-size: .92rem; font-
 #toast { position: fixed; bottom: 1.2rem; left: 50%; transform: translate(-50%, 8px); background: var(--fg); color: var(--bg); padding: .45rem 1rem; border-radius: 999px; font-size: .9rem; opacity: 0; transition: opacity .2s var(--ease), transform .25s var(--ease); pointer-events: none; z-index: 20; box-shadow: var(--shadow); }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 @media (max-width: 600px) {
-  body { font-size: 16px; }
+  body { font-size: 1rem; }
   #top { padding: .5rem .7rem; gap: .5rem; }
   #tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }  /* six tabs: the pill scrolls instead of widening the page */
   #tabs::-webkit-scrollbar { display: none; }
@@ -325,10 +326,10 @@ table.history { border-collapse: collapse; width: 100%; font-size: .92rem; font-
 .chart .grid { stroke: var(--line); stroke-width: 1; }
 .chart .axis { stroke: var(--line); stroke-width: 1; }
 .chart .cross { stroke: var(--muted); stroke-width: 1; }
-.chart .ax, .heat .ax, .past-ctl .ax { fill: var(--muted); color: var(--muted); font-size: 11px; }
+.chart .ax, .heat .ax, .past-ctl .ax { fill: var(--muted); color: var(--muted); font-size: .7rem; }
 .chart .ax.r { text-anchor: end; } .chart .ax.c { text-anchor: middle; }
-.chart .lab { fill: var(--fg); font-size: 12px; font-family: var(--sans); } .chart .lab.r { text-anchor: end; }
-.chart .val { fill: var(--fg); font-size: 12px; font-weight: 600; } .chart .val.r { text-anchor: end; } .chart .val.c { text-anchor: middle; }
+.chart .lab { fill: var(--fg); font-size: .78rem; font-family: var(--sans); } .chart .lab.r { text-anchor: end; }
+.chart .val { fill: var(--fg); font-size: .75rem; font-weight: 600; } .chart .val.r { text-anchor: end; } .chart .val.c { text-anchor: middle; }
 .chart .bar { transition: opacity .12s; } .chart .bar.hot { opacity: .75; }
 .heat-wrap { overflow-x: auto; }
 .heat .cell { cursor: pointer; transition: transform .12s var(--ease); }
