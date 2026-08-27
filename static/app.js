@@ -79,6 +79,7 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
+  scroll: {},  // scroll position remembered per tab
   todayMode: 'due',  // Today tab: 'due' (default) or 'rest' — everything open that is not due
   sel: new Set(), selAnchor: null,  // multi-selection of rows (ids) and the end it grows from
   noteOpen: new Set(),  // ids whose note editor is expanded (session-only, survives re-renders)
@@ -1013,6 +1014,7 @@ async function renderDone(main) {
   const hits = nodes.filter(n => n.kind === 'task' && n.done_at && (!q || hasQ(n, q))).map(n => n.id);
   if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing done yet.</p>'; return; }
   renderOutline(main, hits, extra);
+  arrive(main);
   for (const el of $$('.node.done', main)) {
     const n = extra.get(+el.dataset.id); if (!n?.done_at) continue;
     const w = document.createElement('span'); w.className = 'when'; w.textContent = fmtTime(n.done_at); w.title = 'Done ' + fmtTime(n.done_at);
@@ -1082,20 +1084,27 @@ function setView(v) {
   // The old page becomes a ghost that slips a touch towards where we came from and fades, while the new page
   // arrives from the other side — both at once, on the compositor, so nothing waits and nothing repaints.
   $('#tabs').classList.remove('no-glide');
-  const top = main.getBoundingClientRect().top + window.scrollY, seen = Math.max(0, window.scrollY - top);
-  const ghost = document.createElement('div'); ghost.className = 'ghost'; ghost.style.padding = getComputedStyle(main).padding;
-  const held = document.createElement('div'); held.style.transform = `translateY(${-seen}px)`;
+  const y1 = window.scrollY, r = main.getBoundingClientRect(); S.scroll[S.view] = y1;
+  $$('.ghost').forEach(g => g.remove());
+  // The old page is lifted out into a ghost laid exactly over the view (outside #view, which render() wipes),
+  // above the new page and below the top bar: it dissolves and slips a touch, and the new page is underneath.
+  const ghost = document.createElement('div'); ghost.className = 'ghost';
+  Object.assign(ghost.style, { left: (r.left + window.scrollX) + 'px', top: (r.top + y1) + 'px', width: r.width + 'px', height: r.height + 'px', padding: getComputedStyle(main).padding });
+  const held = document.createElement('div');
   while (main.firstChild) held.appendChild(main.firstChild);
-  ghost.appendChild(held);
-  $$('.ghost', main).forEach(g => g.remove());
+  ghost.appendChild(held); document.body.appendChild(ghost);
+  const ease = 'cubic-bezier(.2,.7,.2,1)';
+  ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-8 * dir}px)` }], { duration: 170, easing: ease, fill: 'forwards' }).finished.then(() => ghost.remove(), () => ghost.remove());
   S.view = v; render();
+  window.scrollTo(0, S.scroll[v] || 0);
+  held.style.transform = `translateY(${window.scrollY - y1}px)`;  // keep the old page exactly where it was on screen
   const page = document.createElement('div'); page.className = 'page';
   while (main.firstChild) page.appendChild(main.firstChild);
-  main.appendChild(page); main.appendChild(ghost);
-  const ease = 'cubic-bezier(.2,.7,.2,1)';
-  ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-12 * dir}px)` }], { duration: 200, easing: ease, fill: 'forwards' }).finished.then(() => ghost.remove(), () => ghost.remove());
-  page.animate([{ opacity: 0, transform: `translateX(${14 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 260, easing: ease });
+  main.appendChild(page);
+  page.animate([{ opacity: 0, transform: `translateX(${6 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 200, easing: ease });
 }
+// content that arrives later (Done, Insights) fades in instead of popping
+function arrive(main) { if (REDUCED.matches || !main.animate) return; const el = $('.page', main) || main; el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' }); }
 // the active-tab pill glides to wherever the active tab is (called after counts change width too)
 const TABW = {};  // natural widths of tabs that fold away, measured once
 function glide() {

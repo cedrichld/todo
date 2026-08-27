@@ -204,8 +204,8 @@ function renderPast(box, day, snap) {
 // ---- the page
 async function renderInsights(main) {
   const first = !INS.data;
-  if (first) main.innerHTML = '<p class="empty-state">Counting…</p>'; else main.classList.add('stale');
-  try { INS.data = await api.insights(); } catch (e) { showError(e); return; } finally { main.classList.remove('stale'); }
+  if (first) main.innerHTML = '<p class="empty-state">Counting…</p>';
+  try { INS.data = await api.insights(); } catch (e) { showError(e); return; }
   if (S.view !== 'insights') return;
   const d = INS.data, W = Math.min(880, Math.max(320, main.clientWidth - 12)), half = Math.floor((W - 24) / 2);
   main.replaceChildren();
@@ -235,6 +235,7 @@ async function renderInsights(main) {
   past.appendChild(h('div', { class: 'past-ctl' }, h('span', { class: 'ax', text: firstSnap ? shortDay(firstSnap) : '' }), slider, h('span', { class: 'ax', text: 'today' }), lab));
   past.appendChild(h('div', { id: 'past' }));
   main.appendChild(past);
+  arrive(main);
   main.appendChild(h('p', { class: 'ins-foot' }, 'Need the raw log of every change? ', h('a', { href: '#', text: 'Open History', onclick: e => { e.preventDefault(); setView('history'); } }), '.'));
   if (INS.day) pickDay(INS.day);
 }
