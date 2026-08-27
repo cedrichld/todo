@@ -427,6 +427,13 @@ async def main():
         await pg.locator('.ins-foot a').click(); await pg.wait_for_timeout(500)
         check('History opens from the Insights footer', await pg.locator('table.history').count() == 1)
         await pg.click('#tabs button[data-view=all]'); await pg.wait_for_timeout(300)
+        # --- clicking the paper lets go of everything
+        bg = by_text(tree(), 'Jordan reachout')
+        await pg.locator(f'.node[data-id="{bg["id"]}"] > .row').click(position={'x': 4, 'y': 6})
+        check('a clicked row is highlighted', await pg.locator('#view .node.current').count() == 1)
+        await pg.mouse.click(5, 400)  # the page margin, left of the outline
+        await pg.wait_for_timeout(150)
+        check('clicking the paper clears the highlight and selection', await pg.locator('#view .node.current, #view .node.selected').count() == 0 and await pg.evaluate('S.current') is None)
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))

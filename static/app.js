@@ -693,9 +693,15 @@ function selectedNodes() {  // selected rows minus those inside another selected
   return [...ids].map(getNode).filter(n => n && ![...ids].some(o => o !== n.id && isDescendant(n, getNode(o)))).sort((a, b) => order.get(a.id) - order.get(b.id));
 }
 function setCurrent(id) {
-  if (S.current !== id) { $('.node.current')?.classList.remove('current'); $(`.node[data-id="${id}"]`)?.classList.add('current'); }
+  if (S.current !== id) { $('.node.current')?.classList.remove('current'); if (id != null) $(`.node[data-id="${id}"]`)?.classList.add('current'); }
   S.current = id;
 }
+// clicking the paper (anything that is not a row, a control or a popover) lets go of everything: selection, highlight, caret
+document.addEventListener('mousedown', e => {
+  if (e.target.closest?.('.node, #popover, #top, #tip, button, input, textarea, a, .view-switch, .viz, .past-ctl')) return;
+  clearSelection(); setCurrent(null); closePopover();
+  const ae = document.activeElement; if (ae && ae !== document.body && ae.closest?.('#view')) ae.blur();
+});
 function onKey(e) {
   const t = e.target;
   if (t.closest?.('#past')) { if (!(e.ctrlKey || e.metaKey || e.altKey) || e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); pastNotice(); } return; }
