@@ -77,6 +77,7 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
+  sel: new Set(), selAnchor: null,  // multi-selection of rows (ids) and the end it grows from
   noteOpen: new Set(),  // ids whose note editor is expanded (session-only, survives re-renders)
   nodes: new Map(), kids: new Map(), drag: null, query: '', current: null,
   view: localStorage.getItem('view') || 'all',
@@ -201,6 +202,7 @@ function render() {
   tabCounts();
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
   if (S.current != null) $(`.node[data-id="${S.current}"]`)?.classList.add('current');
+  for (const id of S.sel) $(`.node[data-id="${id}"]`)?.classList.add('selected');
   window.scrollTo(0, y);
   if (keep) focusNode(keep.id, 'note' in keep ? { note: keep.note } : keep.caret);
 }
@@ -361,7 +363,7 @@ function onNoteKey(e, ta, n) {
   if (e.key === 'Escape' || (ctrl && e.key === '.')) { e.preventDefault(); closePopover(); return toggleNote(n, true); }
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
-  if (ctrl && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }
+  if (itemShortcut(e, n)) return;
   if (e.key === 'Enter') { e.preventDefault(); if (!document.execCommand('insertLineBreak')) document.execCommand('insertHTML', false, '<br>'); return; }
 }
 function patchNodeDom(n) { const el = $(`.node[data-id="${n.id}"]`); if (el) applyStyle(el, n); }
@@ -416,7 +418,7 @@ async function structural(fn, focus) {
 async function refresh(focus) {
   try { setNodes((await api.tree()).nodes); } catch (e) { showError(e); return; }
   render();
-  if (focus && focus.id != null) focusNode(focus.id, focus.caret);
+  if (focus && focus.id != null && !S.sel.size) focusNode(focus.id, focus.caret);  // a live selection keeps the keys global
 }
 
 // ---------------------------------------------------------------- undo / redo
@@ -473,6 +475,12 @@ async function applyEntry(e, dir) {
     case 'archive':
       if (dir === 'undo') { await restoreAt(id, e.parent_id, e.after_id); return { id, caret: 'end' }; }
       await api.del(id); return null;
+    case 'archiveMany':
+      if (dir === 'undo') { for (const p of e.places) await restoreAt(rid(p.id), p.parent_id, p.after_id); return null; }
+      for (const p of e.places) await api.del(rid(p.id)); return null;
+    case 'moveMany':  // forward order both ways: each row's original neighbour is either untouched or already put back
+      for (const m of e.moves) { const to = dir === 'undo' ? m.from : m.to; await api.move(rid(m.id), rid(to.parent_id), rid(to.after_id)); }
+      return null;
     case 'archiveDone':
       if (dir === 'undo') { for (const p of e.places) await restoreAt(rid(p.id), p.parent_id, p.after_id); return null; }
       { const r = await api.archiveDone(); e.places = e.places.filter(p => r.ids.includes(rid(p.id))); return null; }
@@ -546,6 +554,35 @@ function deleteNode(n) {
     return prev != null ? { id: prev, caret: 'end' } : null;
   });
 }
+function deleteMany(nodes) {
+  if (!nodes.length) return;
+  const places = nodes.filter(n => n.text.trim()).map(n => ({ id: n.id, ...placeOf(n) })), prev = neighborId(nodes[0].id, -1);
+  clearSelection();
+  return structural(async () => { for (const n of nodes) await api.del(n.id); }, () => {
+    if (places.length) { pushUndo({ type: 'archiveMany', places, label: `archive ${places.length} items` }); toast(`Archived ${places.length} items — Ctrl+Z to undo`); }
+    return prev != null ? { id: prev, caret: 'end' } : null;
+  });
+}
+function toggleDoneMany(nodes) {
+  nodes = nodes.filter(n => n.kind === 'task'); if (!nodes.length) return;
+  const done = !nodes.every(n => n.done_at), targets = nodes.filter(n => !!n.done_at !== done), changed = [];
+  return structural(async () => { for (const n of targets) changed.push(...(await api.done(n.id, done)).changed); }, () => {
+    pushUndo({ type: 'done', id: targets[0].id, done, changed: [...new Set(changed)], label: `${done ? 'done' : 'not done'} × ${targets.length}` });
+    return null;
+  });
+}
+function moveMany(nodes, parent_id, after_id, before) {
+  const moves = [];
+  return structural(async () => {
+    if (before) await before();
+    let after = after_id;
+    for (const n of nodes) {
+      const from = placeOf(n);
+      if (from.parent_id !== parent_id || from.after_id !== after) { await api.move(n.id, parent_id, after); moves.push({ id: n.id, from, to: { parent_id, after_id: after } }); }
+      after = n.id;
+    }
+  }, () => { if (moves.length) pushUndo({ type: 'moveMany', moves, label: `move ${moves.length} items` }); return null; });
+}
 function moveNode(n, parent_id, after_id, caret, before) {
   const from = placeOf(n);
   if (from.parent_id === parent_id && from.after_id === after_id) return;
@@ -601,6 +638,41 @@ function newRoot() {
 
 // ---------------------------------------------------------------- keyboard
 const currentNode = () => S.current != null ? getNode(S.current) : null;
+// Shortcuts that act on an item wherever the focus is: its title, its note, or just the selected row.
+function itemShortcut(e, n, caret) {
+  const ctrl = e.ctrlKey || e.metaKey; if (!ctrl || e.altKey) return false;
+  const anchor = cls => $(`.node[data-id="${n.id}"] > .row > .${cls}`) || $(`.node[data-id="${n.id}"] > .row`) || document.body;
+  let fn = null;
+  if (e.key === 'Enter') fn = () => toggleDone(n);
+  else if (e.shiftKey && /^Digit[0-4]$/.test(e.code)) fn = () => setPriority(n, ['none', 'urgent', 'soon', 'normal', 'later'][+e.code.slice(5)]);
+  else if (!e.shiftKey && e.key.toLowerCase() === 'd') fn = () => openPopover(anchor('chip'), duePicker(n));
+  else if (!e.shiftKey && e.key.toLowerCase() === 'b') fn = () => { if (n.kind === 'task') openPopover(anchor('wait'), waitPicker(n)); };
+  else if (e.shiftKey && e.key.toLowerCase() === 'h') fn = () => toggleKind(n, caret ? caret() : 'end');
+  else if (e.key === '.') fn = () => { closePopover(); toggleNote(n, true); };
+  else if (e.key === '/') fn = () => openPopover(anchor('menu'), sectionPicker(n));
+  if (!fn) return false;
+  e.preventDefault(); fn(); return true;
+}
+// ---- selecting several rows
+function setSelection(ids, anchor) {
+  S.sel = new Set(ids); if (anchor !== undefined) S.selAnchor = anchor;
+  $$('#view .node.selected').forEach(el => el.classList.remove('selected'));
+  for (const id of S.sel) $(`.node[data-id="${id}"]`)?.classList.add('selected');
+}
+function clearSelection() { if (S.sel.size) setSelection([], null); }
+function selectRange(a, b) {  // every visible row between two ids, in page order
+  const ids = visibleNodeEls().map(el => +el.dataset.id), i = ids.indexOf(a), j = ids.indexOf(b);
+  return i < 0 || j < 0 ? [b] : ids.slice(Math.min(i, j), Math.max(i, j) + 1);
+}
+function extendSelection(dir) {
+  const end = neighborId(S.current, dir) ?? S.current, anchor = S.selAnchor ?? S.current;
+  setSelection(selectRange(anchor, end), anchor); setCurrent(end);
+  $(`.node[data-id="${end}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+function selectedNodes() {  // selected rows minus those inside another selected row, in outline order
+  const ids = S.sel, order = treeOrder();
+  return [...ids].map(getNode).filter(n => n && ![...ids].some(o => o !== n.id && isDescendant(n, getNode(o)))).sort((a, b) => order.get(a.id) - order.get(b.id));
+}
 function setCurrent(id) {
   if (S.current !== id) { $('.node.current')?.classList.remove('current'); $(`.node[data-id="${id}"]`)?.classList.add('current'); }
   S.current = id;
@@ -616,13 +688,10 @@ function onKey(e) {
   if (e.key === 'Escape') { closePopover(); t.blur(); return; }
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
-  if (e.key === 'Enter' && ctrl) { e.preventDefault(); return toggleDone(n); }
-  if (ctrl && e.shiftKey && /^Digit[0-4]$/.test(e.code)) { e.preventDefault(); return setPriority(n, ['none', 'urgent', 'soon', 'normal', 'later'][+e.code.slice(5)]); }
-  if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); return openPopover($(':scope > .row > .chip', t.closest('.node')) || t, duePicker(n)); }
-  if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); if (n.kind === 'task') openPopover($(':scope > .row > .wait', t.closest('.node')) || t, waitPicker(n)); return; }
-  if (ctrl && e.shiftKey && e.key.toLowerCase() === 'h') { e.preventDefault(); return toggleKind(n, caret()); }
-  if (ctrl && e.key === '.') { e.preventDefault(); closePopover(); return toggleNote(n, true); }
-  if (ctrl && e.key === '/') { e.preventDefault(); return openPopover($(':scope > .row > .menu', t.closest('.node')) || t, sectionPicker(n)); }
+  if (itemShortcut(e, n, caret)) return;
+  if (e.shiftKey && !ctrl && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && (e.key === 'ArrowUp' ? caretEdge(t).first : caretEdge(t).last)) {
+    e.preventDefault(); t.blur(); setSelection([n.id], n.id); return extendSelection(e.key === 'ArrowUp' ? -1 : 1);  // start selecting rows
+  }
   if (!outline) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); return enterAt(n, t); }
   if (e.key === 'Backspace' && ctrl && e.shiftKey) { e.preventDefault(); return deleteNode(n); }
@@ -638,17 +707,24 @@ function onGlobalKey(e) {
   const ctrl = e.ctrlKey || e.metaKey, ae = document.activeElement, tag = ae?.tagName;
   const typing = tag === 'INPUT' || tag === 'TEXTAREA' || ae?.isContentEditable;
   if (ctrl && e.key.toLowerCase() === 'k') { e.preventDefault(); const s = $('#search'); s.focus(); s.select(); return; }
-  if (e.key === 'Escape') { closePopover(); return; }
+  if (e.altKey && e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); const i = VIEWS.indexOf(S.view); return setView(VIEWS[(i + (e.key === 'ArrowRight' ? 1 : VIEWS.length - 1)) % VIEWS.length]); }
+  if (e.key === 'Escape') { closePopover(); clearSelection(); return; }
   if (typing && ae !== document.body) return;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (ae && ae !== document.body && !$('#view').contains(ae)) return;  // top bar buttons keep their normal Tab behaviour
   const n = nodeOf(ae) || currentNode();
-  if (!n || S.view !== 'all') return;
+  if (!n) return;
+  if (ctrl && e.key.toLowerCase() === 'a' && !e.shiftKey) { e.preventDefault(); return setSelection(visibleNodeEls().map(el => +el.dataset.id), S.current); }
+  if (e.shiftKey && !ctrl && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); if (!S.sel.size) setSelection([n.id], n.id); return extendSelection(e.key === 'ArrowUp' ? -1 : 1); }
+  if (!ctrl && !e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); clearSelection(); const id = neighborId(n.id, e.key === 'ArrowUp' ? -1 : 1); if (id != null) focusNode(id, 'end'); return; }
+  if (S.sel.size && !ctrl && !e.altKey && e.key === 'Enter') { e.preventDefault(); return toggleDoneMany(selectedNodes()); }
+  if (itemShortcut(e, n)) return;
+  if (S.view !== 'all') return;
   if (e.key === 'Tab' && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return e.shiftKey ? outdent(n, 'end') : indent(n, 'end'); }
-  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, 'end'); }
-  if (ctrl && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return deleteNode(n); }  // the row is selected, not being typed in
+  if (e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, 'end'); }
+  if (!ctrl && !e.altKey && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }  // a selected row, not being typed in
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return S.sel.size ? deleteMany(selectedNodes()) : deleteNode(n); }
 }
 
 // ---------------------------------------------------------------- popovers
@@ -804,7 +880,8 @@ function helpPanel() {
     ['Ctrl+D', 'Due date'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
     ['Ctrl+.', 'Notes on the item (emails, links, details); Esc hides them again'],
     ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
-    ['Ctrl+K', 'Search'], ['Esc', 'Close / unfocus'],
+    ['Alt+Shift+← / →', 'Previous / next tab'], ['Shift+click · Ctrl+click · Shift+↑↓', 'Select several rows; then Enter (done), Delete, or drag one handle to move them all'],
+    ['Ctrl+K', 'Search'], ['Esc', 'Close / unfocus / clear selection'],
   ];
   box.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>';
   return box;
@@ -832,7 +909,8 @@ function clearDropMarks() { $$('.row.drop-before, .row.drop-after, .row.drop-int
 function onDragStart(e) {
   const h = e.target.closest?.('.handle'); if (!h) { e.preventDefault(); return; }
   S.drag = +h.closest('.node').dataset.id;
-  h.closest('.node').classList.add('dragging');
+  const ids = S.sel.has(S.drag) ? S.sel : new Set([S.drag]);
+  for (const id of ids) $(`.node[data-id="${id}"]`)?.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(S.drag));
 }
 function onDragOver(e) {
@@ -849,10 +927,14 @@ function onDrop(e) {
   const mode = row.classList.contains('drop-before') ? 'before' : row.classList.contains('drop-into') ? 'into' : 'after';
   const target = nodeOf(row), dragged = S.nodes.get(S.drag);
   onDragEnd();
+  const group = dragged && S.sel.has(dragged.id) && S.sel.size > 1 ? selectedNodes() : null;
   if (!target || !dragged || target.id === dragged.id || isDescendant(target, dragged)) return;
-  if (mode === 'into') return moveNode(dragged, target.id, null, 'end', target.collapsed ? () => api.patch(target.id, { collapsed: false }) : null);
+  if (group && group.some(n => n.id === target.id || isDescendant(target, n))) return;
+  const open = target.collapsed ? () => api.patch(target.id, { collapsed: false }) : null;
+  if (mode === 'into') return group ? moveMany(group, target.id, null, open) : moveNode(dragged, target.id, null, 'end', open);
   const sibs = kidsOf(target.parent_id), i = sibs.indexOf(target);
   const after = mode === 'before' ? (i > 0 ? sibs[i - 1].id : null) : target.id;
+  if (group) return moveMany(group.filter(n => n.id !== after), target.parent_id, after);
   if (after === dragged.id) return;
   moveNode(dragged, target.parent_id, after, 'end');
 }
@@ -937,6 +1019,7 @@ function applyTheme(choice, animate) {
   root.classList.toggle('dark', dark);
   $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
 }
+const VIEWS = ['all', 'today', 'waiting', 'done', 'history'];
 function setView(v) { S.view = v; localStorage.setItem('view', v); closePopover(); render(); }
 function boot() {
   const view = $('#view');
@@ -946,7 +1029,19 @@ function boot() {
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
   view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el) setCurrent(+el.dataset.id); });
-  view.addEventListener('mousedown', e => { const el = e.target.closest?.('.node'); if (el) setCurrent(+el.dataset.id); });
+  view.addEventListener('mousedown', e => {
+    const el = e.target.closest?.('.node');
+    if (!el) { if (!e.target.closest('#popover')) clearSelection(); return; }
+    const id = +el.dataset.id;
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {  // select rows instead of placing the caret
+      e.preventDefault(); document.activeElement?.blur?.();
+      if (e.shiftKey) { const anchor = S.selAnchor ?? S.current ?? id; setSelection(selectRange(anchor, id), anchor); }
+      else { const next = new Set(S.sel); if (!next.size && S.current != null && S.current !== id) next.add(S.current); next.has(id) ? next.delete(id) : next.add(id); setSelection(next, S.selAnchor ?? S.current ?? id); }
+      setCurrent(id); return;
+    }
+    if (!(S.sel.has(id) && e.target.closest('.handle'))) clearSelection();
+    setCurrent(id);
+  });
   view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); if (e.target.classList?.contains('note-text')) flushNote(+e.target.closest('.node').dataset.id); });
   view.addEventListener('beforeinput', e => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); runUndo(e.inputType === 'historyUndo' ? 'undo' : 'redo'); } });
   view.addEventListener('dragstart', onDragStart);

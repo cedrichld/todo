@@ -30,10 +30,12 @@ Tests: `python3 -m unittest discover -s tests -v`
 | Ctrl+Shift+1 / 2 / 3 / 4 | urgent (red) / soon (orange) / normal (yellow) / later (blue) |
 | Ctrl+Shift+0 | no priority |
 | Ctrl+D | due date (calendar + morning / afternoon / evening) |
+| Alt+Shift+← / → | previous / next tab |
+| Shift+click, Ctrl+click, Shift+↑/↓ | select several rows; Enter marks them done / not done, Delete archives them, dragging one handle moves them all — one Ctrl+Z reverses the whole batch |
 | Delete | remove the selected item — click its row (not the words) first; Ctrl+Shift+Backspace does the same while typing in it. Items with text are archived, so Ctrl+Z brings them back |
 | paste a URL over highlighted words | they become a link (stored as `[words](url)` in the text and the markdown mirror); bare URLs are clickable too |
 | Ctrl+. | notes on the item (emails, links, details). The first line shows in grey after the title; Ctrl+. or clicking it expands an editor under the row, Esc hides it. Notes are searchable and mirrored into `todo.md` as indented lines |
-| Ctrl+B | waiting on someone / something — the row gets hatched with a ⏳ chip showing who and for how long; bump or clear from the same popover. The Waiting tab lists them oldest first |
+| Ctrl+B | waiting on someone / something (works from the title, the note, or a selected row — as do Ctrl+D, Ctrl+., priorities and Ctrl+/) — the row gets hatched with a ⏳ chip showing who and for how long; bump or clear from the same popover. The Waiting tab lists them oldest first |
 | Ctrl+Shift+H | heading ↔ task |
 | Ctrl+K | search |
 | Esc | close popover / unfocus |
