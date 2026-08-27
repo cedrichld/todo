@@ -110,9 +110,47 @@ function caretOffset(el) {
 function setCaret(el, offset) {
   el.focus();
   const range = document.createRange(), sel = getSelection();
-  const node = el.firstChild;
-  if (!node) range.setStart(el, 0); else range.setStart(node, Math.max(0, Math.min(offset, node.length)));
+  let rem = Math.max(0, offset), placed = false;
+  for (const c of el.childNodes) {  // links are non-editable islands: the caret lands before or after them, never inside
+    const len = c.textContent.length;
+    if (c.nodeType === 3 && rem <= len) { range.setStart(c, rem); placed = true; break; }
+    if (c.nodeType !== 3 && rem <= len) { if (rem === 0) range.setStartBefore(c); else range.setStartAfter(c); placed = true; break; }
+    rem -= len;
+  }
+  if (!placed) { const last = el.lastChild; if (!last) range.setStart(el, 0); else if (last.nodeType === 3) range.setStart(last, last.length); else range.setStartAfter(last); }
   range.collapse(true); sel.removeAllRanges(); sel.addRange(range);
+}
+// Links live in the text as [label](url) (bare urls count too) and render as real anchors.
+const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'"])/g;
+function linkEl(label, href) {
+  const a = document.createElement('a'); a.className = 'link'; a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.title = href;
+  a.contentEditable = 'false'; a.textContent = label; return a;
+}
+function setText(el, text) {
+  el.textContent = '';
+  let last = 0, m; LINK_RE.lastIndex = 0;
+  while ((m = LINK_RE.exec(text))) {
+    if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+    el.appendChild(m[1] != null ? linkEl(m[1], m[2]) : linkEl(m[3], m[3]));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+  else if (el.lastChild && el.lastChild.nodeType !== 3) el.appendChild(document.createTextNode(ZW));
+}
+const ZW = '\u200b';
+function getText(el) {
+  let out = '';
+  for (const c of el.childNodes) {
+    if (c.nodeType === 3) out += c.data.replaceAll(ZW, '');
+    else if (c.classList?.contains('link')) { const href = c.getAttribute('href'), label = c.textContent; out += label === href ? href : `[${label}](${href})`; }
+    else out += c.textContent;
+  }
+  return out;
+}
+function textBeforeCaret(el) {
+  const sel = getSelection(); if (!sel.rangeCount || !el.contains(sel.anchorNode)) return getText(el);
+  const r = sel.getRangeAt(0).cloneRange(); r.setStart(el, 0);
+  return getText(r.cloneContents());
 }
 function caretEdge(el) {
   const sel = getSelection();
@@ -152,6 +190,7 @@ function render() {
   tabCounts();
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
   $$('#view .note-text').forEach(autosize);  // scrollHeight is only known once attached
+  if (S.current != null) $(`.node[data-id="${S.current}"]`)?.classList.add('current');
   window.scrollTo(0, y);
   if (keep) focusNode(keep.id, 'note' in keep ? { note: keep.note } : keep.caret);
 }
@@ -202,7 +241,7 @@ function renderNode(n, depth, match, forceOpen, flat) {
     (isTask ? `<button class="wait" tabindex="-1"></button>` : '') +
     `<button class="menu" tabindex="-1" title="More"></button>`;
   const t = $('.text', row);
-  t.textContent = n.text;
+  setText(t, n.text);
   if (n.kind === 'heading') t.dataset.placeholder = 'Section';
   el.appendChild(row);
   if (S.noteOpen.has(n.id)) el.appendChild(noteEditor(n));
@@ -321,7 +360,7 @@ function onInput(e) {
   if (t.classList?.contains('note-text')) return onNoteInput(t);
   if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
-  n.text = t.textContent;
+  n.text = getText(t);
   clearTimeout(textTimers.get(n.id));
   textTimers.set(n.id, setTimeout(() => flushText(n.id), 300));
 }
@@ -337,8 +376,16 @@ function flushText(id) {
 function onPaste(e) {
   const t = e.target; if (!t.classList?.contains('text')) return;
   e.preventDefault();
-  const text = (e.clipboardData.getData('text/plain') || '').replace(/\s*[\r\n]+\s*/g, ' ');
-  document.execCommand('insertText', false, text);
+  insertPasted(t, e.clipboardData.getData('text/plain') || '');
+}
+function insertPasted(t, raw) {
+  const sel = getSelection();
+  if (/^https?:\/\/\S+$/.test(raw.trim()) && sel.rangeCount && !sel.isCollapsed && t.contains(sel.anchorNode)) {
+    // a url pasted over highlighted words turns them into a link, like in Docs
+    document.execCommand('insertHTML', false, linkEl(sel.toString(), raw.trim()).outerHTML + ZW);
+    return;
+  }
+  document.execCommand('insertText', false, raw.replace(/\s*[\r\n]+\s*/g, ' '));
 }
 // A structural change: flush pending text, run the write, refetch the tree, re-render, focus.
 async function structural(fn, focus) {
@@ -463,7 +510,7 @@ async function toggleKind(n, caret) {
   await refresh({ id: n.id, caret });
 }
 function enterAt(n, t) {
-  const at = caretOffset(t), text = t.textContent;
+  const text = getText(t), at = textBeforeCaret(t).length;
   let parent_id = n.parent_id, after_id = n.id;
   if (n.kind === 'heading' || (kidsOf(n.id).length && !n.collapsed)) { parent_id = n.id; after_id = null; }
   if (textTimers.has(n.id)) { clearTimeout(textTimers.get(n.id)); textTimers.delete(n.id); }
@@ -477,7 +524,7 @@ function deleteNode(n) {
   const prev = neighborId(n.id, -1), place = placeOf(n), snap = { kind: n.kind, text: n.text };
   return structural(() => api.del(n.id), r => {
     if (r.hard) pushUndo({ type: 'hardDelete', id: n.id, ...place, ...snap, label: 'delete' });
-    else pushUndo({ type: 'archive', id: n.id, ...place, label: 'archive' });
+    else { pushUndo({ type: 'archive', id: n.id, ...place, label: 'archive' }); toast(`Archived “${n.text.slice(0, 40)}${n.text.length > 40 ? '…' : ''}” — Ctrl+Z to undo`); }
     return prev != null ? { id: prev, caret: 'end' } : null;
   });
 }
@@ -536,12 +583,16 @@ function newRoot() {
 
 // ---------------------------------------------------------------- keyboard
 const currentNode = () => S.current != null ? S.nodes.get(S.current) : null;
+function setCurrent(id) {
+  if (S.current !== id) { $('.node.current')?.classList.remove('current'); $(`.node[data-id="${id}"]`)?.classList.add('current'); }
+  S.current = id;
+}
 function onKey(e) {
   const t = e.target;
   if (t.classList?.contains('note-text')) { const n = nodeOf(t); if (n) { S.current = n.id; onNoteKey(e, t, n); } return; }
   if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
-  S.current = n.id;
+  setCurrent(n.id);
   const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
   const caret = () => caretOffset(t);
   if (e.key === 'Escape') { closePopover(); t.blur(); return; }
@@ -556,7 +607,8 @@ function onKey(e) {
   if (ctrl && e.key === '/') { e.preventDefault(); return openPopover($(':scope > .row > .menu', t.closest('.node')) || t, sectionPicker(n)); }
   if (!outline) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); return enterAt(n, t); }
-  if (e.key === 'Backspace' && t.textContent === '') { e.preventDefault(); return deleteNode(n); }
+  if (e.key === 'Backspace' && ctrl && e.shiftKey) { e.preventDefault(); return deleteNode(n); }
+  if (e.key === 'Backspace' && t.textContent.replaceAll(ZW, '') === '') { e.preventDefault(); return deleteNode(n); }
   if (e.key === 'Tab') { e.preventDefault(); return e.shiftKey ? outdent(n, caret()) : indent(n, caret()); }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, caret()); }
   if (e.key === 'ArrowUp' && !e.shiftKey && caretEdge(t).first) { const id = neighborId(n.id, -1); if (id != null) { e.preventDefault(); focusNode(id, 'end'); } return; }
@@ -578,6 +630,7 @@ function onGlobalKey(e) {
   if (e.key === 'Tab' && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return e.shiftKey ? outdent(n, 'end') : indent(n, 'end'); }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, 'end'); }
   if (ctrl && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return deleteNode(n); }  // the row is selected, not being typed in
 }
 
 // ---------------------------------------------------------------- popovers
@@ -709,7 +762,7 @@ function nodeMenu(n) {
     n.kind === 'task' && n.waiting_on ? ['Bump · still waiting', '', () => setWaiting(n, n.waiting_on, new Date().toISOString(), 'bump')] : null,
     n.kind === 'task' && n.waiting_on ? ['Not waiting anymore', '', () => setWaiting(n, null, null)] : null,
     null,
-    [n.text.trim() ? 'Archive (keeps history)' : 'Delete', 'Backspace on empty', () => deleteNode(n)],
+    [n.text.trim() ? 'Archive (keeps history)' : 'Delete', 'Del', () => deleteNode(n)],
   ];
   for (const it of items) {
     if (it === null) { box.appendChild(document.createElement('hr')); continue; }
@@ -724,7 +777,8 @@ function nodeMenu(n) {
 function helpPanel() {
   const box = document.createElement('div'); box.className = 'help';
   const rows = [
-    ['Enter', 'New item below (splits at cursor)'], ['Backspace on empty', 'Delete item'],
+    ['Enter', 'New item below (splits at cursor)'], ['Delete', 'Remove the selected item (click its row first, or Ctrl+Shift+Backspace while typing in it)'],
+    ['Paste a link', 'Highlight words and paste a URL: they become a link'],
     ['Tab / Shift+Tab', 'Nest under the item above / un-nest'], ['Alt+↑ / Alt+↓', 'Move up / down (hops into the next section at the edge)'],
     ['Ctrl+/', 'Move to another section'], ['Drag the grip', 'Reorder; drop on a section title to move into it'],
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
@@ -740,13 +794,15 @@ function helpPanel() {
 
 // ---------------------------------------------------------------- mouse: clicks + drag
 function onClick(e) {
+  const a = e.target.closest('a.link');
+  if (a && $('#view').contains(a)) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); return; }
   const pv = e.target.closest('.note-preview');
   if (pv && $('#view').contains(pv)) { const n = nodeOf(pv); if (n) { S.current = n.id; toggleNote(n, true); } return; }
   const btn = e.target.closest('button, .check');
   if (!btn || !$('#view').contains(btn)) return;
   const nodeEl = btn.closest('.node'); if (!nodeEl) return;
   const n = nodeOf(btn); if (!n) return;
-  S.current = n.id;
+  setCurrent(n.id);
   if (btn.classList.contains('fold')) return toggleFold(n);
   if (btn.classList.contains('dot')) return openPopover(btn, priorityPicker(n));
   if (btn.classList.contains('chip')) return openPopover(btn, duePicker(n));
@@ -833,7 +889,7 @@ async function renderDone(main) {
     for (const n of items) {
       const row = document.createElement('div'); row.className = 'log-row';
       row.innerHTML = `<input type="checkbox" checked title="Mark not done"><span class="log-text"></span><span class="path"></span><span class="log-time"></span>`;
-      $('.log-text', row).textContent = n.text;
+      setText($('.log-text', row), n.text);
       $('.path', row).textContent = n.path.join(' › ');
       $('.log-time', row).textContent = n.done_at.slice(11, 16);
       $('input', row).onchange = () => queue.run(() => api.done(n.id, false)).then(() => refresh()).catch(showError);
@@ -872,8 +928,8 @@ function boot() {
   view.addEventListener('paste', onPaste);
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
-  view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el) S.current = +el.dataset.id; });
-  view.addEventListener('mousedown', e => { const el = e.target.closest?.('.node'); if (el) S.current = +el.dataset.id; });
+  view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el) setCurrent(+el.dataset.id); });
+  view.addEventListener('mousedown', e => { const el = e.target.closest?.('.node'); if (el) setCurrent(+el.dataset.id); });
   view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); if (e.target.classList?.contains('note-text')) flushNote(+e.target.closest('.node').dataset.id); });
   view.addEventListener('beforeinput', e => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); runUndo(e.inputType === 'historyUndo' ? 'undo' : 'redo'); } });
   view.addEventListener('dragstart', onDragStart);

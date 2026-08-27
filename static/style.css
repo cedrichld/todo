@@ -82,6 +82,10 @@ button { cursor: pointer; }
 .text { flex: 1; min-width: 2rem; outline: none; white-space: pre-wrap; word-break: break-word; padding: .02rem .3rem; border-radius: var(--r-s); transition: background-color .15s var(--ease), color .2s var(--ease), opacity .2s var(--ease); }
 .text:focus { background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
 .text:empty::before { content: attr(data-placeholder); color: var(--muted); opacity: .6; font-style: italic; }
+.node.current > .row:not(:focus-within) { background-color: var(--hover); }  /* selected but not being typed in: Delete acts on it */
+.text a.link { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: .14em; border-radius: 2px; cursor: pointer; transition: background-color .12s, text-decoration-color .12s; }
+.text a.link:hover { text-decoration-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.node.done > .row > .text a.link { color: inherit; }
 .node.heading.d0 > .row { margin-top: 1.7rem; border-bottom: 1px solid var(--line); border-radius: var(--r-s) var(--r-s) 0 0; margin-bottom: .35rem; padding-bottom: .2rem; }
 .node.heading.d0 > .row > .text { font-size: 1.75rem; font-weight: 700; line-height: 1.2; letter-spacing: -.012em; }
 .node.heading.d1 > .row > .text { font-size: 1.3rem; font-weight: 600; margin-top: .8rem; letter-spacing: -.005em; }
