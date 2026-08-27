@@ -348,3 +348,41 @@ class Store:
             for p in parents:
                 self._renumber(self._siblings(p))
         return count
+
+    # ------------------------------------------------------------ queries
+    def path(self, node_id):
+        out = []
+        pid = self.get(node_id)['parent_id']
+        while pid is not None:
+            p = self.get(pid)
+            if p['kind'] == 'heading':
+                out.append(p['text'])
+            pid = p['parent_id']
+        out.reverse()
+        return out
+
+    def done_log(self, date_from=None, date_to=None):
+        sql = 'SELECT * FROM nodes WHERE done_at IS NOT NULL'
+        args = []
+        if date_from:
+            sql += ' AND substr(done_at,1,10) >= ?'
+            args.append(date_from)
+        if date_to:
+            sql += ' AND substr(done_at,1,10) <= ?'
+            args.append(date_to)
+        sql += ' ORDER BY done_at DESC, id DESC'
+        days = []
+        for r in self.conn.execute(sql, args):
+            n = dict(r)
+            n['path'] = self.path(n['id'])
+            day = n['done_at'][:10]
+            if not days or days[-1]['day'] != day:
+                days.append({'day': day, 'items': []})
+            days[-1]['items'].append(n)
+        return days
+
+    def search(self, q):
+        rows = self.conn.execute(
+            'SELECT * FROM nodes WHERE archived_at IS NULL AND text LIKE ? '
+            'ORDER BY parent_id, position, id', (f'%{q}%',))
+        return [dict(r) for r in rows]

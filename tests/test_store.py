@@ -206,3 +206,36 @@ class Mirror(StoreTestCase):
         self.s.delete(t['id'])
         with open(self.md) as f:
             self.assertEqual(f.read(), '# H\n')
+
+
+class Queries(StoreTestCase):
+    def test_path_lists_heading_ancestors_only(self):
+        h1 = self.s.create(kind='heading', text='Lab')
+        h2 = self.s.create(parent_id=h1['id'], kind='heading', text='Racer')
+        t = self.s.create(parent_id=h2['id'], text='parent task')
+        k = self.s.create(parent_id=t['id'], text='kid')
+        self.assertEqual(self.s.path(k['id']), ['Lab', 'Racer'])
+        self.assertEqual(self.s.path(h1['id']), [])
+
+    def test_done_log_groups_by_day_and_includes_archived(self):
+        h = self.s.create(kind='heading', text='H')
+        a = self.s.create(parent_id=h['id'], text='a')
+        b = self.s.create(parent_id=h['id'], text='b')
+        self.s.set_done(a['id'], True)
+        self.s.set_done(b['id'], True)
+        self.s.conn.execute("UPDATE nodes SET done_at='2026-08-20T09:00:00+00:00' WHERE id=?", (a['id'],))
+        self.s.conn.commit()
+        self.s.archive_done()
+        days = self.s.done_log()
+        self.assertEqual([len(d['items']) for d in days], [1, 1])
+        self.assertEqual(days[1]['day'], '2026-08-20')
+        self.assertEqual(days[1]['items'][0]['path'], ['H'])
+        self.assertEqual(self.s.done_log(date_from='2026-08-21'), days[:1])
+        self.assertEqual(self.s.done_log(date_to='2026-08-20'), days[1:])
+
+    def test_search_is_case_insensitive_and_skips_archived(self):
+        a = self.s.create(text='Reach out Jo')
+        self.s.create(text='other')
+        self.assertEqual([n['id'] for n in self.s.search('jo')], [a['id']])
+        self.s.delete(a['id'])
+        self.assertEqual(self.s.search('jo'), [])
