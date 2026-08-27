@@ -187,7 +187,11 @@ kbd { font-family: inherit; font-size: .75rem; color: var(--muted); background: 
 .help td { padding: .12rem .7rem .12rem 0; }
 
 /* views */
-h2.group { font-size: .78rem; color: var(--muted); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin: 1.6rem 0 .35rem; }
+h2.group { font-size: 1.2rem; font-weight: 600; color: var(--fg); margin: 1.7rem 0 .4rem; padding: 0 .4rem .2rem; border-bottom: 1px solid var(--line); line-height: 1.25; }
+h2.group:first-child, .view-note + h2.group { margin-top: .6rem; }
+h2.group .crumbs { color: var(--muted); font-weight: 400; font-size: .95rem; }
+h2.group.top { color: var(--muted); font-weight: 400; font-style: italic; }
+.view-note { font-size: .82rem; color: var(--muted); margin: .2rem .4rem 0; letter-spacing: .02em; }
 .log-row { display: flex; gap: .5rem; align-items: baseline; padding: .18rem 0; }
 .log-row input { align-self: center; accent-color: var(--done); }
 .log-time { color: var(--muted); font-size: .8rem; margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }

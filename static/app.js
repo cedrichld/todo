@@ -856,37 +856,45 @@ function onDrop(e) {
 function onDragEnd() { S.drag = null; clearDropMarks(); $$('.node.dragging').forEach(el => el.classList.remove('dragging')); }
 
 // ---------------------------------------------------------------- views
-function renderToday(main) {
-  main.innerHTML = '';
-  const t = todayISO(), q = S.query.trim().toLowerCase(), order = treeOrder();
-  const items = [...S.nodes.values()]
-    .filter(n => n.kind === 'task' && !n.done_at && ((n.due_date && n.due_date <= t) || n.priority === 'urgent'))
-    .filter(n => !q || hasQ(n, q))
-    .sort((a, b) => order.get(a.id) - order.get(b.id));
-  if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing due today and nothing urgent.</p>'; return; }
-  const groups = new Map();
-  for (const n of items) { const key = pathOf(n).join(' › ') || '(top level)'; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(n); }
-  for (const [key, list] of groups) {
-    const h = document.createElement('h2'); h.className = 'group'; h.textContent = key; main.appendChild(h);
-    list.sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999') || PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority]);
+// Today and Waiting list tasks under the section they live in, so the heading says where each item comes from.
+function sectionHeading(path) {
+  const h = document.createElement('h2'); h.className = 'group';
+  if (!path.length) { h.textContent = 'Top level'; h.classList.add('top'); return h; }
+  const crumbs = document.createElement('span'); crumbs.className = 'crumbs'; crumbs.textContent = path.slice(0, -1).map(p => p + ' › ').join('');
+  h.appendChild(crumbs); h.appendChild(document.createTextNode(path.at(-1)));
+  return h;
+}
+function renderGrouped(main, items, sortWithin) {
+  const order = treeOrder(), groups = new Map();
+  for (const n of items.sort((a, b) => order.get(a.id) - order.get(b.id))) {
+    const path = pathOf(n), key = path.join('\u0000');
+    if (!groups.has(key)) groups.set(key, { path, list: [] });
+    groups.get(key).list.push(n);
+  }
+  for (const { path, list } of groups.values()) {
+    main.appendChild(sectionHeading(path));
+    list.sort(sortWithin);
     for (const n of list) main.appendChild(renderNode(n, 0, null, false, true));
   }
+}
+function renderToday(main) {
+  main.innerHTML = '';
+  const t = todayISO(), q = S.query.trim().toLowerCase();
+  const items = [...S.nodes.values()]
+    .filter(n => n.kind === 'task' && !n.done_at && ((n.due_date && n.due_date <= t) || n.priority === 'urgent'))
+    .filter(n => !q || hasQ(n, q));
+  if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing due today and nothing urgent.</p>'; return; }
+  renderGrouped(main, items, (a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999') || PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority]);
 }
 function renderWaiting(main) {
   main.innerHTML = '';
   const q = S.query.trim().toLowerCase();
   const items = [...S.nodes.values()]
     .filter(n => n.kind === 'task' && n.waiting_on && !n.done_at)
-    .filter(n => !q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))
-    .sort((a, b) => (a.waiting_since || '').localeCompare(b.waiting_since || ''));
+    .filter(n => !q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q));
   if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
-  const h = document.createElement('h2'); h.className = 'group'; h.textContent = `${items.length} waiting · oldest first`; main.appendChild(h);
-  for (const n of items) {
-    const el = renderNode(n, 0, null, false, true);
-    const p = document.createElement('span'); p.className = 'path'; p.textContent = pathOf(n).join(' › ');
-    $(':scope > .row', el).insertBefore(p, $(':scope > .row > .menu', el));
-    main.appendChild(el);
-  }
+  const p = document.createElement('p'); p.className = 'view-note'; p.textContent = `${items.length} waiting · oldest first within each section`; main.appendChild(p);
+  renderGrouped(main, items, (a, b) => (a.waiting_since || '').localeCompare(b.waiting_since || ''));
 }
 async function renderDone(main) {
   main.innerHTML = '<p class="empty-state">Loading…</p>';

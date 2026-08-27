@@ -255,7 +255,7 @@ async def main():
         check('chip names who and how long', 'Sam' in await pg.locator(f'.node[data-id="{first["id"]}"] > .row > .wait').text_content() and 'today' in await pg.locator(f'.node[data-id="{first["id"]}"] > .row > .wait').text_content())
         check('still an open todo', not tr[first['id']]['done_at'])
         await pg.click('#tabs button[data-view=waiting]'); await pg.wait_for_timeout(300)
-        check('Waiting tab lists it with its section', await pg.locator('#view .node').count() == 1 and 'Career' in await pg.locator('#view .node .path').text_content())
+        check('Waiting tab lists it under its section heading', await pg.locator('#view .node').count() == 1 and 'Career' in await pg.locator('#view h2.group').first.text_content())
         await pg.locator('#view .node > .row > .wait').click(); await pg.wait_for_timeout(200)
         await pg.locator('#popover .wait-actions button', has_text='Not waiting').click(); await pg.wait_for_timeout(600)
         check('clearing removes it from the Waiting tab', tree()[first['id']]['waiting_on'] is None and await pg.locator('#view .node').count() == 0)
