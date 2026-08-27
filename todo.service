@@ -1,0 +1,11 @@
+[Unit]
+Description=Local todo list (http://127.0.0.1:5757)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/dev/todo/server.py --db %h/dev/todo/data/todo.db
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
