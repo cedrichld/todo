@@ -5,9 +5,11 @@ regenerates the markdown mirror when `md_path` is set.
 """
 import contextlib
 import datetime
+import json
 import re
 import sqlite3
 import threading
+import zlib
 
 import export_md
 
@@ -52,7 +54,13 @@ CREATE TABLE IF NOT EXISTS history (
   snapshot TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS history_ts ON history(ts);
+CREATE TABLE IF NOT EXISTS snapshots (
+  day      TEXT PRIMARY KEY,
+  taken_at TEXT NOT NULL,
+  nodes    BLOB NOT NULL
+);
 """
+RETENTION_DAYS = 365  # snapshots and history older than this are dropped when the store opens
 
 
 def now_iso():
@@ -88,6 +96,8 @@ class Store:
         self._migrate()
         self.md_path = md_path
         self.lock = threading.RLock()
+        self._prune()
+        self._snapshot()
 
     def _migrate(self):
         """Columns added after the first release; older databases get them on open."""
@@ -130,6 +140,105 @@ class Store:
     def _export(self):
         if self.md_path:
             export_md.write(self.md_path, self.tree())
+        self._snapshot()
+
+    # ------------------------------------------------------------ snapshots (one per day: the list as it was at the day's last save)
+    def _snapshot(self):
+        day = datetime.date.today().isoformat()
+        blob = zlib.compress(json.dumps(self.tree(), separators=(',', ':')).encode())
+        with self.conn:
+            self.conn.execute('INSERT OR REPLACE INTO snapshots(day, taken_at, nodes) VALUES (?,?,?)', (day, now_iso(), blob))
+
+    def _prune(self):
+        cutoff = (datetime.date.today() - datetime.timedelta(days=RETENTION_DAYS)).isoformat()
+        with self.conn:
+            self.conn.execute('DELETE FROM snapshots WHERE day < ?', (cutoff,))
+            self.conn.execute('DELETE FROM history WHERE substr(ts, 1, 10) < ?', (cutoff,))
+
+    def snapshot_days(self):
+        return [r['day'] for r in self.conn.execute('SELECT day FROM snapshots ORDER BY day')]
+
+    def snapshot(self, day):
+        """The list as it stood at the end of `day` (the latest snapshot on or before it), or None."""
+        row = self.conn.execute('SELECT day, taken_at, nodes FROM snapshots WHERE day <= ? ORDER BY day DESC LIMIT 1', (day,)).fetchone()
+        if row is None:
+            return None
+        return {'day': row['day'], 'taken_at': row['taken_at'], 'nodes': json.loads(zlib.decompress(row['nodes']))}
+
+    # ------------------------------------------------------------ insights
+    def insights(self, today=None):
+        today = today or datetime.date.today()
+        start = today - datetime.timedelta(days=RETENTION_DAYS - 1)
+        days = [(start + datetime.timedelta(days=i)).isoformat() for i in range(RETENTION_DAYS)]
+        idx = {d: i for i, d in enumerate(days)}
+        done = [0] * len(days); created = [0] * len(days); undone = [0] * len(days)
+        by_hour = [0] * 24; by_dow = [0] * 7; section_done = {}
+        first_day = None
+        sections = {}  # node id -> top-level section text, for nodes still known
+        for r in self.conn.execute("SELECT node_id, ts, action FROM history WHERE action IN ('done','undone','create','import') AND substr(ts,1,10) >= ? ORDER BY ts", (start.isoformat(),)):
+            d = r['ts'][:10]
+            if d not in idx:
+                continue
+            first_day = first_day or d
+            i = idx[d]
+            if r['action'] == 'done':
+                done[i] += 1
+                t = datetime.datetime.fromisoformat(r['ts'])
+                by_hour[t.hour] += 1; by_dow[t.weekday()] += 1
+                nid = r['node_id']
+                if nid not in sections:
+                    try:
+                        p = self.path(nid)
+                        sections[nid] = p[0] if p else self.get(nid)['text'] or '(top level)'
+                    except StoreError:
+                        sections[nid] = '(removed)'
+                section_done[sections[nid]] = section_done.get(sections[nid], 0) + 1
+            elif r['action'] == 'undone':
+                undone[i] += 1
+            else:
+                created[i] += 1
+        # open tasks per day: real snapshots where we have them, otherwise walked back from today's count
+        snaps = {r['day']: r['nodes'] for r in self.conn.execute('SELECT day, nodes FROM snapshots WHERE day >= ?', (start.isoformat(),))}
+        live = [n for n in self.tree() if n['kind'] == 'task']
+        open_now = sum(1 for n in live if not n['done_at'])
+        open_series = [None] * len(days)
+        cur = open_now
+        for i in range(len(days) - 1, -1, -1):
+            d = days[i]
+            if d in snaps:
+                nodes = json.loads(zlib.decompress(snaps[d]))
+                cur = sum(1 for n in nodes if n['kind'] == 'task' and not n['done_at'])
+            open_series[i] = cur
+            cur = max(0, cur - created[i] + done[i] - undone[i])
+        # streaks: consecutive days with at least one completion, counted back from today (or yesterday)
+        streak = 0; i = len(days) - 1
+        if done[i] == 0:
+            i -= 1
+        while i >= 0 and done[i] > 0:
+            streak += 1; i -= 1
+        best = run = 0
+        for v in done:
+            run = run + 1 if v else 0
+            best = max(best, run)
+        by_section = sorted(section_done.items(), key=lambda kv: -kv[1])
+        open_by_section = {}
+        for n in live:
+            if n['done_at']:
+                continue
+            p = self.path(n['id'])
+            key = p[0] if p else '(top level)'
+            open_by_section[key] = open_by_section.get(key, 0) + 1
+        overdue = sum(1 for n in live if not n['done_at'] and n['due_date'] and n['due_date'] < today.isoformat())
+        return {
+            'days': days, 'done': done, 'created': created, 'open': open_series,
+            'by_hour': by_hour, 'by_dow': by_dow,
+            'by_section': [{'section': k, 'done': v, 'open': open_by_section.get(k, 0)} for k, v in by_section],
+            'streak': streak, 'best_streak': best, 'first_day': first_day,
+            'totals': {'open': open_now, 'overdue': overdue, 'waiting': sum(1 for n in live if not n['done_at'] and n['waiting_on']),
+                       'done_7': sum(done[-7:]), 'done_30': sum(done[-30:]), 'done_365': sum(done),
+                       'created_30': sum(created[-30:]), 'done_all_time': self.conn.execute("SELECT COUNT(*) FROM history WHERE action='done'").fetchone()[0]},
+            'snapshot_days': self.snapshot_days(),
+        }
 
     def _siblings(self, parent_id):
         rows = self.conn.execute(

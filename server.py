@@ -48,6 +48,8 @@ ROUTES = [
     ('POST', r'/api/done-batch$', lambda s, m, q, b: {'ids': s.set_done_many([int(i) for i in b.get('ids', [])], bool(b.get('done', True)))}),
     ('POST', r'/api/archive-done$', lambda s, m, q, b: (lambda ids: {'archived': len(ids), 'ids': ids})(s.archive_done(b.get('before')))),
     ('GET', r'/api/done$', lambda s, m, q, b: {'days': s.done_log(q.get('from'), q.get('to'))}),
+    ('GET', r'/api/insights$', lambda s, m, q, b: s.insights()),
+    ('GET', r'/api/snapshot/(\d{4}-\d{2}-\d{2})$', lambda s, m, q, b: s.snapshot(m.group(1)) or {'day': None, 'nodes': []}),
     ('GET', r'/api/history$', lambda s, m, q, b: {'rows': s.history(q.get('q', ''), int(q.get('limit', 300)))}),
     ('GET', r'/api/search$', lambda s, m, q, b: {'nodes': s.search(q.get('q', ''))}),
 ]

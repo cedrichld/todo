@@ -1,11 +1,13 @@
 import datetime
+import json
 import os
 import sqlite3
+import zlib
 import shutil
 import tempfile
 import unittest
 
-from db import SCHEMA, Store, StoreError
+from db import RETENTION_DAYS, SCHEMA, Store, StoreError
 
 
 class StoreTestCase(unittest.TestCase):
@@ -485,3 +487,58 @@ class DueSoon(StoreTestCase):
         self.assertEqual((n['priority'], n['auto_urgent']), ('soon', self.d(0)))
         self.assertEqual(self.s.sweep_due(), [])
         self.assertIsNone(self.s.update(self.t['id'], due_date=None)['auto_urgent'])
+
+
+class Snapshots(StoreTestCase):
+    """One compressed copy of the list per day it was saved; a year is kept; older data goes at open."""
+
+    def test_every_save_updates_todays_snapshot_and_old_ones_are_pruned(self):
+        today = datetime.date.today().isoformat()
+        h = self.s.create(kind='heading', text='H')
+        t = self.s.create(parent_id=h['id'], text='first')
+        snap = self.s.snapshot(today)
+        self.assertEqual(snap['day'], today)
+        self.assertEqual([n['text'] for n in snap['nodes']], ['H', 'first'])
+        self.s.update(t['id'], text='renamed')
+        self.assertEqual([n['text'] for n in self.s.snapshot(today)['nodes']], ['H', 'renamed'])
+        old_day = (datetime.date.today() - datetime.timedelta(days=RETENTION_DAYS + 3)).isoformat()
+        kept_day = (datetime.date.today() - datetime.timedelta(days=RETENTION_DAYS - 3)).isoformat()
+        blob = zlib.compress(json.dumps([]).encode())
+        self.s.conn.execute('INSERT INTO snapshots(day, taken_at, nodes) VALUES (?,?,?)', (old_day, 't', blob))
+        self.s.conn.execute('INSERT INTO snapshots(day, taken_at, nodes) VALUES (?,?,?)', (kept_day, 't', blob))
+        self.s.conn.execute("INSERT INTO history(node_id, ts, action, snapshot) VALUES (?,?,?,?)", (t['id'], old_day + 'T09:00:00+00:00', 'done', 'x'))
+        self.s.conn.commit()
+        path = self.s.conn.execute('PRAGMA database_list').fetchone()[2]
+        self.s.close()
+        self.s = Store(path, md_path=self.md)
+        self.assertEqual(self.s.snapshot_days(), [kept_day, today])
+        self.assertEqual(self.s.conn.execute('SELECT COUNT(*) FROM history WHERE ts LIKE ?', (old_day + '%',)).fetchone()[0], 0)
+        # a day without a snapshot shows the latest earlier one; before any snapshot there is nothing
+        between = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        self.assertEqual(self.s.snapshot(between)['day'], kept_day)
+        self.assertIsNone(self.s.snapshot('2000-01-01'))
+
+
+class Insights(StoreTestCase):
+    def test_counts_streaks_and_sections(self):
+        h = self.s.create(kind='heading', text='Lab')
+        a = self.s.create(parent_id=h['id'], text='a')
+        b = self.s.create(parent_id=h['id'], text='b')
+        c = self.s.create(text='loose')
+        self.s.set_done(a['id'], True)
+        self.s.set_done(b['id'], True)
+        yesterday = (datetime.datetime.now().astimezone() - datetime.timedelta(days=1)).isoformat(timespec='milliseconds')
+        self.s.conn.execute("UPDATE history SET ts=? WHERE node_id=? AND action='done'", (yesterday, b['id']))
+        self.s.conn.commit()
+        ins = self.s.insights()
+        self.assertEqual(len(ins['days']), RETENTION_DAYS)
+        self.assertEqual(ins['done'][-1], 1)
+        self.assertEqual(ins['done'][-2], 1)
+        self.assertEqual(ins['created'][-1], 4)
+        self.assertEqual(ins['streak'], 2)
+        self.assertEqual(ins['best_streak'], 2)
+        self.assertEqual(ins['by_section'], [{'section': 'Lab', 'done': 2, 'open': 0}])
+        self.assertEqual(ins['totals']['open'], 1)
+        self.assertEqual(ins['open'][-1], 1)
+        self.assertEqual(sum(ins['by_hour']), 2)
+        self.assertEqual(ins['snapshot_days'], [datetime.date.today().isoformat()])

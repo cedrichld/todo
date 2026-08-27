@@ -401,6 +401,19 @@ async def main():
         check('Everything else lists open tasks that are not due', await pg.locator(f'.node[data-id="{plain["id"]}"]').count() == 1 and await pg.locator('#view .node.task:not(.ctx)').count() > 5, await pg.locator('#view .node.task:not(.ctx)').count())  # due tomorrow but no longer red → not 'due today'
         await pg.locator('.view-switch button', has_text='Due today').click(); await pg.wait_for_timeout(300)
         await pg.click('#tabs button[data-view=all]'); await pg.wait_for_timeout(300)
+        # --- insights
+        await pg.click('#tabs button[data-view=insights]'); await pg.wait_for_timeout(1200)
+        check('Insights shows the stat row and a year heatmap', await pg.locator('.stats .stat').count() == 4 and await pg.locator('.heat .cell').count() == 365, await pg.locator('.heat .cell').count())
+        check('Insights draws the charts', await pg.locator('svg.chart').count() >= 5, await pg.locator('svg.chart').count())
+        await pg.locator('.viz-range button', has_text='Year').click(); await pg.wait_for_timeout(900)
+        check('Year range folds completions into weeks', await pg.locator('.viz h3', has_text='Completed per week').count() == 1)
+        await pg.locator('.viz-table-btn').first.click(); await pg.wait_for_timeout(200)
+        check('charts have a table twin', await pg.locator('.viz-table:not([hidden]) table tr').count() > 10)
+        await pg.locator('.heat .cell').last.click(); await pg.wait_for_timeout(1200)
+        check("picking a day shows that day's list, read-only", await pg.locator('#past .past-tree .node').count() > 50 and await pg.locator('#past .text[contenteditable="false"]').count() > 50 and 'open task' in await pg.locator('#past .past-summary').text_content())
+        await pg.locator('#past .node .text').first.click(); await pg.keyboard.type('zzz'); await pg.wait_for_timeout(500)
+        check('the past list cannot be edited', not any('zzz' in n['text'] for n in tree().values()))
+        await pg.click('#tabs button[data-view=all]'); await pg.wait_for_timeout(300)
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))

@@ -50,6 +50,8 @@ const api = {
   archiveDone: () => api.req('POST', '/api/archive-done', {}),
   doneTree: () => api.req('GET', '/api/done-tree'),
   history: q => api.req('GET', `/api/history?q=${encodeURIComponent(q)}`),
+  insights: () => api.req('GET', '/api/insights'),
+  snapshot: day => api.req('GET', `/api/snapshot/${day}`),
 };
 
 // Writes run one at a time, in order. Network/server failures retry forever (1s, 2s, … 30s);
@@ -92,7 +94,7 @@ function index() {
 }
 const kidsOf = id => S.kids.get(id) || [];
 const getNode = id => S.nodes.get(id) || S.extra?.get(id);  // S.extra: archived nodes shown by the Done view
-const nodeOf = el => { const x = el?.closest?.('.node'); return x ? getNode(+x.dataset.id) : null; };
+const nodeOf = el => { const x = el?.closest?.('.node'); return x && !x.closest('#past') ? getNode(+x.dataset.id) : null; };  // the past-day outline is read-only
 function pathOf(n) { const out = []; let p = n.parent_id; while (p != null) { const pn = S.nodes.get(p); if (!pn) break; if (pn.kind === 'heading') out.unshift(pn.text); p = pn.parent_id; } return out; }
 function isDescendant(n, ancestor) { let p = n.parent_id; while (p != null) { if (p === ancestor.id) return true; p = S.nodes.get(p)?.parent_id; } return false; }
 function treeOrder() { const m = new Map(); let i = 0; (function walk(pid) { for (const n of kidsOf(pid)) { m.set(n.id, i++); walk(n.id); } })(null); return m; }
@@ -201,7 +203,7 @@ function render() {
   main.classList.toggle('filtered', S.view !== 'all');
   if (S.view !== 'done') S.extra = null;
   tabCounts();
-  ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
+  ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory, insights: renderInsights })[S.view](main);
   if (S.current != null) $(`.node[data-id="${S.current}"]`)?.classList.add('current');
   for (const id of S.sel) $(`.node[data-id="${id}"]`)?.classList.add('selected');
   window.scrollTo(0, y);
@@ -1036,7 +1038,7 @@ function applyTheme(choice, animate) {
   root.classList.toggle('dark', dark);
   $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
 }
-const VIEWS = ['all', 'today', 'waiting', 'done', 'history'];
+const VIEWS = ['all', 'today', 'waiting', 'done', 'history', 'insights'];
 function setView(v) { S.view = v; localStorage.setItem('view', v); closePopover(); render(); }
 function boot() {
   const view = $('#view');
