@@ -201,6 +201,7 @@ function render() {
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
   main.classList.toggle('filtered', S.view !== 'all');
+  glide();
   if (S.view !== 'done') S.extra = null;
   tabCounts();
   ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory, insights: renderInsights })[S.view](main);
@@ -1051,7 +1052,30 @@ function applyTheme(choice, animate) {
   $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
 }
 const VIEWS = ['all', 'today', 'waiting', 'done', 'insights', 'history'];  // history is tucked away: reached from Insights, shown as a tab only while open
-function setView(v) { S.view = v; localStorage.setItem('view', v); closePopover(); render(); }
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
+function setView(v) {
+  if (v === S.view) return;
+  const main = $('#view'), from = VIEWS.indexOf(S.view), to = VIEWS.indexOf(v), dir = to > from ? 1 : -1;
+  localStorage.setItem('view', v); closePopover();
+  if (REDUCED.matches || !main.animate) { S.view = v; render(); return; }
+  // the old page slips a touch towards where we came from and fades; the new one arrives from the other side
+  $('#tabs').classList.remove('no-glide');
+  S.view = v; glide();
+  const out = main.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-10 * dir}px)` }], { duration: 110, easing: 'ease-in', fill: 'forwards' });
+  out.finished.then(() => {
+    out.cancel();  // drop the filled end state before the new page comes in
+    render();
+    main.animate([{ opacity: 0, transform: `translateX(${14 * dir}px)` }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)' });
+  }, () => {});
+}
+// the active-tab pill glides to wherever the active tab is (called after counts change width too)
+function glide() {
+  const tabs = $('#tabs'), g = $('.glider', tabs), b = $(`#tabs button[data-view="${S.view}"]`); if (!g || !b) return;
+  g.style.width = b.offsetWidth + 'px'; g.style.transform = `translateX(${b.offsetLeft}px)`;
+  requestAnimationFrame(() => tabs.classList.remove('no-glide'));
+}
+// the History tab changes width while it folds in or out: keep the pill on the active tab as it does
+document.addEventListener('transitionend', e => { if (e.target.closest?.('#tabs') && (e.propertyName === 'max-width' || e.propertyName === 'padding-left')) glide(); });
 function boot() {
   const view = $('#view');
   view.addEventListener('keydown', onKey);
