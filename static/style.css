@@ -1,9 +1,10 @@
 :root {
   --bg: #fbfaf7; --fg: #1c1b19; --muted: #8a8680; --line: #e6e2da; --chip: #efece6;
   --accent: #3b6ea5; --urgent: #d92d20; --soon: #e8871e; --normal: #b8960a; --later: #3b82f6; --done: #5c9a5c;
+  --wait: #7c5cbf;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #17181a; --fg: #e8e6e1; --muted: #8b8f98; --line: #2c2f34; --chip: #26292e; --normal: #d9b400; --accent: #6ea0d8; }
+  :root { --bg: #17181a; --fg: #e8e6e1; --muted: #8b8f98; --line: #2c2f34; --chip: #26292e; --normal: #d9b400; --accent: #6ea0d8; --wait: #a98ee6; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font-family: "EB Garamond", Garamond, "Times New Roman", serif; font-size: 17px; line-height: 1.45; }
@@ -26,7 +27,7 @@ button, input { font-family: inherit; }
 .node > .kids { margin-left: 1.5rem; }
 .node.heading > .kids { margin-left: .4rem; }
 .row { display: flex; align-items: baseline; gap: .35rem; padding: .08rem .2rem; border-radius: 4px; }
-.row:hover { background: color-mix(in srgb, var(--chip) 65%, transparent); }
+.row:hover { background-color: color-mix(in srgb, var(--chip) 65%, transparent); }
 .handle { cursor: grab; color: var(--line); width: .9rem; font-size: .75rem; user-select: none; align-self: center; flex: none; }
 .row:hover .handle { color: var(--muted); }
 .fold { background: none; border: none; width: 1rem; padding: 0; color: var(--muted); cursor: pointer; font-size: .7rem; visibility: hidden; align-self: center; flex: none; transition: transform .1s; }
@@ -50,6 +51,19 @@ button, input { font-family: inherit; }
 .row:hover .chip.empty, .row:focus-within .chip.empty { display: inline-block; }
 .chip.today { color: var(--fg); font-weight: 700; }
 .chip.overdue { background: var(--urgent); color: #fff; }
+/* waiting on someone: hatched row + violet bar, still a normal todo */
+.node.waiting > .row { background-image: repeating-linear-gradient(135deg, transparent 0 8px, color-mix(in srgb, var(--wait) 9%, transparent) 8px 10px); box-shadow: inset 3px 0 0 var(--wait); }
+.wait { font-size: .72rem; background: color-mix(in srgb, var(--wait) 14%, transparent); border: none; border-radius: 999px; padding: .05rem .5rem; color: var(--wait); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.wait.empty { display: none; background: var(--chip); color: var(--muted); font-weight: 400; }
+.row:hover .wait.empty, .row:focus-within .wait.empty { display: inline-block; }
+.wait.stale { background: var(--wait); color: #fff; }
+.wait-picker { display: flex; flex-direction: column; gap: .45rem; min-width: 19rem; }
+.wait-title { font-size: .8rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.wait-input { font-size: 1rem; padding: .3rem .55rem; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+.wait-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.wait-actions button { font-size: .9rem; background: var(--chip); border: none; border-radius: 6px; padding: .25rem .6rem; cursor: pointer; color: inherit; }
+.wait-actions button.primary { background: var(--wait); color: #fff; }
+.wait-note { font-size: .8rem; color: var(--muted); max-width: 22rem; }
 .menu { background: none; border: none; color: var(--muted); cursor: pointer; visibility: hidden; font-size: 1rem; padding: 0 .25rem; align-self: center; flex: none; }
 .row:hover .menu, .row:focus-within .menu { visibility: visible; }
 .row.drop-before { box-shadow: 0 -2px 0 var(--accent); }

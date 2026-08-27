@@ -14,7 +14,7 @@ import export_md
 PRIORITIES = ('urgent', 'soon', 'normal', 'later', 'none')
 SLOTS = ('morning', 'afternoon', 'evening')
 KINDS = ('heading', 'task')
-EDITABLE = ('text', 'priority', 'color', 'due_date', 'due_slot', 'kind', 'collapsed')
+EDITABLE = ('text', 'priority', 'color', 'due_date', 'due_slot', 'kind', 'collapsed', 'waiting_on', 'waiting_since')
 TEXT_COALESCE_SECONDS = 120  # successive text edits within this window share one history row
 _UNSET = object()
 
@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   due_slot    TEXT CHECK (due_slot IN ('morning','afternoon','evening')),
   collapsed   INTEGER NOT NULL DEFAULT 0,
   done_at     TEXT,
+  waiting_on  TEXT,
+  waiting_since TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   archived_at TEXT
@@ -73,8 +75,17 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA foreign_keys=ON')
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.md_path = md_path
         self.lock = threading.RLock()
+
+    def _migrate(self):
+        """Columns added after the first release; older databases get them on open."""
+        cols = {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}
+        for col in ('waiting_on', 'waiting_since'):
+            if col not in cols:
+                self.conn.execute(f'ALTER TABLE nodes ADD COLUMN {col} TEXT')
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
@@ -167,6 +178,13 @@ class Store:
             raise StoreError(f"bad color {f['color']!r}")
         if 'text' in f and not isinstance(f['text'], str):
             raise StoreError('text must be a string')
+        if f.get('waiting_on') is not None and not isinstance(f['waiting_on'], str):
+            raise StoreError('waiting_on must be a string')
+        if f.get('waiting_since') is not None:
+            try:
+                datetime.datetime.fromisoformat(f['waiting_since'])
+            except (TypeError, ValueError):
+                raise StoreError(f"bad waiting_since {f['waiting_since']!r}") from None
 
     def _create(self, parent_id, after_id, kind, text, priority, color, due_date, due_slot, done_at, action):
         self._validate(kind=kind, priority=priority, color=color, due_date=due_date,
@@ -206,11 +224,20 @@ class Store:
             for k, v in fields.items():
                 if k == 'collapsed':
                     v = 1 if v else 0
+                if k == 'waiting_on':
+                    v = v.strip() or None if v else None
                 if old[k] != v:
                     changes[k] = v
+            if changes.get('waiting_on', old['waiting_on']) is None:
+                changes['waiting_since'] = None  # nothing to wait for, nothing to count from
+            elif 'waiting_on' in changes and not (changes.get('waiting_since') or old['waiting_since']):
+                changes['waiting_since'] = ts
+            if changes.get('waiting_since') == old['waiting_since']:
+                del changes['waiting_since']
             auto = set()  # fields cleared as a side effect of becoming a heading; not logged
             if changes.get('kind') == 'heading':
-                for k, v in (('priority', 'none'), ('due_date', None), ('due_slot', None), ('done_at', None)):
+                for k, v in (('priority', 'none'), ('due_date', None), ('due_slot', None), ('done_at', None),
+                             ('waiting_on', None), ('waiting_since', None)):
                     if old[k] != v:
                         changes[k] = v
                         auto.add(k)
@@ -218,12 +245,16 @@ class Store:
                 return old
             snapshot = changes.get('text', old['text'])
             for k, v in changes.items():
-                if k in ('collapsed', 'done_at', 'due_date', 'due_slot') or k in auto:
+                if k in ('collapsed', 'done_at', 'due_date', 'due_slot', 'waiting_since') or k in auto:
                     continue
                 if k == 'text':
                     self._log_text_edit(node_id, old['text'], v, ts)
                 else:
-                    self._log(node_id, 'edit', field=k, old=_s(old[k]), new=_s(v), snapshot=snapshot, ts=ts)
+                    self._log(node_id, 'edit', field='waiting' if k == 'waiting_on' else k,
+                              old=_s(old[k]), new=_s(v), snapshot=snapshot, ts=ts)
+            if 'waiting_since' in changes and 'waiting_on' not in changes and old['waiting_on'] and 'waiting_since' not in auto:
+                self._log(node_id, 'edit', field='waiting', old=old['waiting_on'], new=old['waiting_on'] + ' (bumped)',
+                          snapshot=snapshot, ts=ts)
             if ('due_date' in changes or 'due_slot' in changes) and not auto & {'due_date', 'due_slot'}:
                 self._log(node_id, 'edit', field='due', old=_due_str(old),
                           new=_due_str({**old, **changes}), snapshot=snapshot, ts=ts)

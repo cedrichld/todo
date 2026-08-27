@@ -145,7 +145,7 @@ function render() {
   const y = window.scrollY;
   const main = $('#view');
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
-  ({ all: renderAll, today: renderToday, done: renderDone, history: renderHistory })[S.view](main);
+  ({ all: renderAll, today: renderToday, waiting: renderWaiting, done: renderDone, history: renderHistory })[S.view](main);
   window.scrollTo(0, y);
   if (keep) focusNode(keep.id, keep.caret);
 }
@@ -182,6 +182,7 @@ function renderNode(n, depth, match, forceOpen, flat) {
     (isTask ? `<button class="dot" tabindex="-1" title="Priority"></button>` : '') +
     `<span class="text" contenteditable="true" spellcheck="false"></span>` +
     (isTask ? `<button class="chip" tabindex="-1" title="Due (Ctrl+D)"></button>` : '') +
+    (isTask ? `<button class="wait" tabindex="-1"></button>` : '') +
     `<button class="menu" tabindex="-1" title="More">⋯</button>`;
   const t = $('.text', row);
   t.textContent = n.text;
@@ -215,6 +216,24 @@ function applyStyle(el, n) {
     chip.classList.toggle('overdue', isOverdue(n));
     chip.classList.toggle('today', n.due_date === todayISO() && !n.done_at);
   }
+  const waiting = !!n.waiting_on && !n.done_at;
+  el.classList.toggle('waiting', waiting);
+  const w = $(':scope > .row > .wait', el);
+  if (w) {
+    w.textContent = waiting ? `⏳ ${n.waiting_on} · ${waitAge(n)}` : '+ waiting';
+    w.classList.toggle('empty', !waiting);
+    w.classList.toggle('stale', waiting && daysWaiting(n) >= WAIT_STALE_DAYS);
+    w.title = waiting ? `Waiting on ${n.waiting_on} since ${n.waiting_since ? fmtDay(n.waiting_since.slice(0, 10)) : '?'} — click to bump or clear (Ctrl+B)` : 'Waiting on someone / something (Ctrl+B)';
+  }
+}
+// Blocked todos stay todos: the row is hatched and carries who/what it waits on and for how long, so bumping is obvious.
+const WAIT_STALE_DAYS = 7;
+function daysWaiting(n) { return n.waiting_since ? Math.floor((Date.now() - new Date(n.waiting_since).getTime()) / 86400000) : 0; }
+function waitAge(n) { const d = daysWaiting(n); return d <= 0 ? 'today' : d === 1 ? '1 day' : `${d} days`; }
+function setWaiting(n, who, since, label) {
+  patchFields(n, { waiting_on: who, waiting_since: since }, label || (who ? 'waiting on' : 'not waiting')).catch(showError);
+  patchNodeDom(n);
+  if (S.view !== 'all') render();
 }
 function patchNodeDom(n) { const el = $(`.node[data-id="${n.id}"]`); if (el) applyStyle(el, n); }
 
@@ -265,7 +284,7 @@ const remap = (oldId, newId) => { undoState.idMap.delete(newId); if (oldId !== n
 function pushUndo(entry) {
   entry.t = Date.now();
   const top = undoState.stack.at(-1);
-  if (top && entry.type === 'patch' && top.type === 'patch' && top.id === entry.id && !undoState.redo.length
+  if (top && entry.type === 'patch' && top.type === 'patch' && top.id === entry.id && top.label === entry.label && !undoState.redo.length
       && entry.t - top.t < 1500 && Object.keys(top.new).join() === Object.keys(entry.new).join()) { top.new = entry.new; top.t = entry.t; return; }
   undoState.stack.push(entry);
   if (undoState.stack.length > undoState.max) undoState.stack.shift();
@@ -446,6 +465,7 @@ function onKey(e) {
   if (e.key === 'Enter' && ctrl) { e.preventDefault(); return toggleDone(n); }
   if (ctrl && e.shiftKey && /^Digit[0-4]$/.test(e.code)) { e.preventDefault(); return setPriority(n, ['none', 'urgent', 'soon', 'normal', 'later'][+e.code.slice(5)]); }
   if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); return openPopover($(':scope > .row > .chip', t.closest('.node')) || t, duePicker(n)); }
+  if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); if (n.kind === 'task') openPopover($(':scope > .row > .wait', t.closest('.node')) || t, waitPicker(n)); return; }
   if (ctrl && e.shiftKey && e.key.toLowerCase() === 'h') { e.preventDefault(); return toggleKind(n, caret()); }
   if (ctrl && e.key === '/') { e.preventDefault(); return openPopover($(':scope > .row > .menu', t.closest('.node')) || t, sectionPicker(n)); }
   if (!outline) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
@@ -569,6 +589,22 @@ function sectionPicker(n) {
   setTimeout(() => input.focus(), 0);
   return box;
 }
+function waitPicker(n) {
+  const box = document.createElement('div'); box.className = 'wait-picker';
+  box.innerHTML = `<div class="wait-title">Waiting on</div><input class="wait-input" placeholder="who or what — e.g. Sam: which channel?"><div class="wait-actions"></div><div class="wait-note"></div>`;
+  const inp = $('.wait-input', box), acts = $('.wait-actions', box);
+  inp.value = n.waiting_on || '';
+  $('.wait-note', box).textContent = n.waiting_on ? `Since ${n.waiting_since ? fmtDay(n.waiting_since.slice(0, 10)) : '?'} (${waitAge(n)}). It stays on the list — bump when you chase it.` : 'The item stays a normal todo; it just shows who you are waiting for and since when.';
+  const finish = () => { closePopover(); focusNode(n.id); };
+  const clear = () => { setWaiting(n, null, null); finish(); };
+  const set = () => { const v = inp.value.trim(); if (!v) return clear(); setWaiting(n, v, v === n.waiting_on ? n.waiting_since : new Date().toISOString()); finish(); };
+  const btn = (label, fn, cls) => { const b = document.createElement('button'); b.textContent = label; b.className = cls || ''; b.onclick = fn; acts.appendChild(b); };
+  btn(n.waiting_on ? 'Update' : 'Mark as waiting', set, 'primary');
+  if (n.waiting_on) { btn('Bump · still waiting', () => { setWaiting(n, n.waiting_on, new Date().toISOString(), 'bump'); finish(); }); btn('Not waiting anymore', clear); }
+  inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); set(); } };
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+  return box;
+}
 function nodeMenu(n) {
   const box = document.createElement('div'); box.className = 'menu-list';
   const anchor = () => $(`.node[data-id="${n.id}"] > .row > .menu`);
@@ -582,6 +618,9 @@ function nodeMenu(n) {
     null,
     [n.kind === 'task' ? 'Make heading' : 'Make task', 'Ctrl+Shift+H', () => toggleKind(n, caret())],
     n.kind === 'task' ? [n.done_at ? 'Mark not done' : 'Mark done', 'Ctrl+Enter', () => toggleDone(n)] : null,
+    n.kind === 'task' ? [n.waiting_on ? `Waiting on ${n.waiting_on}…` : 'Waiting on…', 'Ctrl+B', () => openPopover(anchor() || document.body, waitPicker(n)), true] : null,
+    n.kind === 'task' && n.waiting_on ? ['Bump · still waiting', '', () => setWaiting(n, n.waiting_on, new Date().toISOString(), 'bump')] : null,
+    n.kind === 'task' && n.waiting_on ? ['Not waiting anymore', '', () => setWaiting(n, null, null)] : null,
     null,
     [n.text.trim() ? 'Archive (keeps history)' : 'Delete', 'Backspace on empty', () => deleteNode(n)],
   ];
@@ -603,7 +642,8 @@ function helpPanel() {
     ['Ctrl+/', 'Move to another section'], ['Drag ⋮⋮', 'Reorder; drop on a section title to move into it'],
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
     ['Ctrl+Shift+1 2 3 4', 'Urgent / Soon / Normal / Later'], ['Ctrl+Shift+0', 'No priority'],
-    ['Ctrl+D', 'Due date'], ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
+    ['Ctrl+D', 'Due date'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
+    ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
     ['Ctrl+K', 'Search'], ['Esc', 'Close / unfocus'],
   ];
   box.innerHTML = '<table>' + rows.map(([k, v]) => `<tr><td><kbd>${k}</kbd></td><td>${v}</td></tr>`).join('') + '</table>';
@@ -620,6 +660,7 @@ function onClick(e) {
   if (btn.classList.contains('fold')) return toggleFold(n);
   if (btn.classList.contains('dot')) return openPopover(btn, priorityPicker(n));
   if (btn.classList.contains('chip')) return openPopover(btn, duePicker(n));
+  if (btn.classList.contains('wait')) return openPopover(btn, waitPicker(n));
   if (btn.classList.contains('menu')) return openPopover(btn, nodeMenu(n));
 }
 function onChange(e) { if (e.target.classList?.contains('check')) { const n = nodeOf(e.target); if (n) toggleDone(n); } }
@@ -668,6 +709,22 @@ function renderToday(main) {
     const h = document.createElement('h2'); h.className = 'group'; h.textContent = key; main.appendChild(h);
     list.sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999') || PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority]);
     for (const n of list) main.appendChild(renderNode(n, 0, null, false, true));
+  }
+}
+function renderWaiting(main) {
+  main.innerHTML = '';
+  const q = S.query.trim().toLowerCase();
+  const items = [...S.nodes.values()]
+    .filter(n => n.kind === 'task' && n.waiting_on && !n.done_at)
+    .filter(n => !q || n.text.toLowerCase().includes(q) || n.waiting_on.toLowerCase().includes(q))
+    .sort((a, b) => (a.waiting_since || '').localeCompare(b.waiting_since || ''));
+  if (!items.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
+  const h = document.createElement('h2'); h.className = 'group'; h.textContent = `${items.length} waiting · oldest first`; main.appendChild(h);
+  for (const n of items) {
+    const el = renderNode(n, 0, null, false, true);
+    const p = document.createElement('span'); p.className = 'path'; p.textContent = pathOf(n).join(' › ');
+    $(':scope > .row', el).insertBefore(p, $(':scope > .row > .menu', el));
+    main.appendChild(el);
   }
 }
 async function renderDone(main) {

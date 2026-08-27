@@ -1,9 +1,10 @@
 import os
+import sqlite3
 import shutil
 import tempfile
 import unittest
 
-from db import Store, StoreError
+from db import SCHEMA, Store, StoreError
 
 
 class StoreTestCase(unittest.TestCase):
@@ -252,6 +253,56 @@ class DoneFlow(StoreTestCase):
         self.assertTrue(self.done(self.x)); self.assertFalse(self.done(self.p))
         with self.assertRaises(StoreError):
             self.s.set_done(self.h['id'], True)
+
+
+class Waiting(StoreTestCase):
+    """Blocked todos: waiting_on (who/what) + waiting_since, still ordinary open tasks."""
+
+    def setUp(self):
+        super().setUp()
+        self.h = self.s.create(kind='heading', text='H')
+        self.t = self.s.create(parent_id=self.h['id'], text='Reach out Jo')
+
+    def test_marking_waiting_stamps_since_and_logs(self):
+        n = self.s.update(self.t['id'], waiting_on='Sam: which channel')
+        self.assertEqual(n['waiting_on'], 'Sam: which channel')
+        self.assertTrue(n['waiting_since'])
+        self.assertIsNone(n['done_at'])
+        row = self.chrono('edit')[-1]
+        self.assertEqual((row['field'], row['old'], row['new']), ('waiting', '', 'Sam: which channel'))
+
+    def test_bump_resets_since_and_clear_drops_both(self):
+        self.s.update(self.t['id'], waiting_on='Sam', waiting_since='2026-08-01T09:00:00-04:00')
+        n = self.s.update(self.t['id'], waiting_since='2026-08-20T09:00:00-04:00')
+        self.assertEqual(n['waiting_since'], '2026-08-20T09:00:00-04:00')
+        self.assertEqual(self.chrono('edit')[-1]['new'], 'Sam (bumped)')
+        n = self.s.update(self.t['id'], waiting_on='')
+        self.assertIsNone(n['waiting_on']); self.assertIsNone(n['waiting_since'])
+        self.assertEqual(self.chrono('edit')[-1]['new'], '')
+
+    def test_rejects_bad_values_and_headings_drop_it(self):
+        with self.assertRaises(StoreError):
+            self.s.update(self.t['id'], waiting_since='not a time')
+        with self.assertRaises(StoreError):
+            self.s.update(self.t['id'], waiting_on=5)
+        self.s.update(self.t['id'], waiting_on='Sam')
+        n = self.s.update(self.t['id'], kind='heading')
+        self.assertIsNone(n['waiting_on']); self.assertIsNone(n['waiting_since'])
+
+    def test_mirror_and_migration(self):
+        self.s.update(self.t['id'], waiting_on='Sam', waiting_since='2026-08-20T09:00:00-04:00')
+        with open(self.md) as f:
+            self.assertIn('- [ ] Reach out Jo (waiting on Sam since 2026-08-20)', f.read())
+        old = os.path.join(self.dir, 'old.db')
+        con = sqlite3.connect(old)
+        con.executescript(SCHEMA.replace('  waiting_on  TEXT,\n  waiting_since TEXT,\n', ''))
+        con.execute("INSERT INTO nodes(parent_id, position, kind, text, created_at, updated_at) VALUES (NULL, 0, 'task', 'legacy', 't', 't')")
+        con.commit(); con.close()
+        s2 = Store(old)
+        try:
+            self.assertEqual(s2.update(1, waiting_on='Bob')['waiting_on'], 'Bob')
+        finally:
+            s2.close()
 
 
 class Mirror(StoreTestCase):

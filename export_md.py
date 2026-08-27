@@ -28,6 +28,9 @@ def render(nodes):
                     tags.append('color=' + n['color'])
                 if n['due_date']:
                     tags.append('@' + n['due_date'] + ('/' + n['due_slot'] if n['due_slot'] else ''))
+                if n.get('waiting_on') and not n['done_at']:
+                    since = n.get('waiting_since') or ''
+                    tags.append('(waiting on ' + n['waiting_on'] + (' since ' + since[:10] if since else '') + ')')
                 if n['done_at']:
                     tags.append('(done ' + n['done_at'][:10] + ')')
                 line = '  ' * tdepth + '- ' + box + ' ' + n['text']

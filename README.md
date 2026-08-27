@@ -30,6 +30,7 @@ Tests: `python3 -m unittest discover -s tests -v`
 | Ctrl+Shift+1 / 2 / 3 / 4 | urgent (red) / soon (orange) / normal (yellow) / later (blue) |
 | Ctrl+Shift+0 | no priority |
 | Ctrl+D | due date (calendar + morning / afternoon / evening) |
+| Ctrl+B | waiting on someone / something — the row gets hatched with a ⏳ chip showing who and for how long; bump or clear from the same popover. The Waiting tab lists them oldest first |
 | Ctrl+Shift+H | heading ↔ task |
 | Ctrl+K | search |
 | Esc | close popover / unfocus |
