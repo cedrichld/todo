@@ -1,3 +1,30 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Todo</title></head>
-<body>placeholder — replaced in Task 8</body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Todo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="top">
+  <nav id="tabs">
+    <button data-view="all">All</button>
+    <button data-view="today">Today</button>
+    <button data-view="done">Done</button>
+    <button data-view="history">History</button>
+  </nav>
+  <input id="search" type="search" placeholder="Search   Ctrl+K" autocomplete="off">
+  <label id="hide-done-label"><input type="checkbox" id="hide-done"> Hide done</label>
+  <button id="archive-done" title="Archive every done task (they stay in Done and History)">Archive done</button>
+  <button id="help-btn" title="Keyboard shortcuts">?</button>
+  <span id="status" class="saved" title="saved"></span>
+</header>
+<main id="view"></main>
+<div id="popover" hidden></div>
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>
