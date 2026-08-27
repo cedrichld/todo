@@ -153,12 +153,12 @@ a.link:hover { text-decoration-color: var(--accent); background: color-mix(in sr
 .node.heading.d0 > .row > .text { font-size: 1.85rem; line-height: 1.15; letter-spacing: -.01em; }
 .node.heading.d1 > .row > .text { font-size: 1.35rem; margin-top: .85rem; line-height: 1.2; }
 .node.heading.d2 > .row > .text, .node.heading.d3 > .row > .text { font-size: 1.12rem; margin-top: .45rem; }
-/* priority is a highlighter mark on the words: a full swipe for urgent, a lower swipe for soon, a thinner one for normal, a pen line for later.
+/* priority is a highlighter mark on the words: a full swipe in red, orange or yellow; a pen line for later.
    A marked title sizes to its words so the mark ends where the words do. */
 .node.task[data-prio]:not([data-prio=none]) > .row > .text { flex: 0 1 auto; }
 .node.task[data-prio=urgent] > .row > .text { --mark: var(--hl-urgent); --mark-size: 100% 88%; --mark-pos: 0 100%; }
-.node.task[data-prio=soon]   > .row > .text { --mark: var(--hl-soon); --mark-size: 100% 58%; --mark-pos: 0 92%; }
-.node.task[data-prio=normal] > .row > .text { --mark: var(--hl-normal); --mark-size: 100% 44%; --mark-pos: 0 94%; }
+.node.task[data-prio=soon]   > .row > .text { --mark: var(--hl-soon); --mark-size: 100% 88%; --mark-pos: 0 100%; }
+.node.task[data-prio=normal] > .row > .text { --mark: var(--hl-normal); --mark-size: 100% 88%; --mark-pos: 0 100%; }
 .node.task[data-prio=later]  > .row > .text { --mark: var(--hl-later); --mark-size: 100% 2px; --mark-pos: 0 96%; }
 /* the strike draws itself in when a task is done (the one authored motion on the page) */
 .node.task > .row > .text { --mark: transparent; --mark-size: 0 0; --mark-pos: 0 100%; background-image: linear-gradient(currentColor, currentColor), linear-gradient(var(--mark), var(--mark)); background-repeat: no-repeat; background-origin: content-box, padding-box; background-size: 0% 1px, var(--mark-size); background-position: 0 56%, var(--mark-pos); -webkit-box-decoration-break: clone; box-decoration-break: clone; transition: background-size .4s var(--ease), background-color .15s var(--ease), color .2s var(--ease), opacity .2s var(--ease), flex-grow 0s linear .4s; }  /* on un-tick the span stays word-wide until the strike has retracted, then grows back */
