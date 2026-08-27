@@ -536,9 +536,46 @@ class Insights(StoreTestCase):
         self.assertEqual(ins['done'][-2], 1)
         self.assertEqual(ins['created'][-1], 4)
         self.assertEqual(ins['streak'], 2)
+        self.s.set_done(a['id'], False); self.s.set_done(a['id'], True); self.s.set_done(a['id'], False); self.s.set_done(a['id'], True)
+        self.assertEqual(self.s.insights()['done'][-1], 1)  # undo / redo cycles still count the task once
+        self.s.set_done(a['id'], False)
+        self.assertEqual(self.s.insights()['done'][-1], 0)
+        self.assertEqual(self.s.insights()['totals']['done_all_time'], 1)
+        self.s.set_done(a['id'], True)
         self.assertEqual(ins['best_streak'], 2)
         self.assertEqual(ins['by_section'], [{'section': 'Lab', 'done': 2, 'open': 0}])
         self.assertEqual(ins['totals']['open'], 1)
         self.assertEqual(ins['open'][-1], 1)
         self.assertEqual(sum(ins['by_hour']), 2)
         self.assertEqual(ins['snapshot_days'], [datetime.date.today().isoformat()])
+
+
+class Reconstruct(StoreTestCase):
+    """Days before the first snapshot are rebuilt from the history by undoing later changes."""
+
+    def test_rebuilds_yesterday_from_history(self):
+        h = self.s.create(kind='heading', text='H')
+        a = self.s.create(parent_id=h['id'], text='old name')
+        b = self.s.create(parent_id=h['id'], text='b')
+        gone = self.s.create(parent_id=h['id'], text='archived later')
+        self.s.set_done(b['id'], True)
+        # pretend all of that happened yesterday, and today's snapshot did not exist back then
+        y = (datetime.datetime.now().astimezone() - datetime.timedelta(days=1)).replace(hour=10)
+        self.s.conn.execute('UPDATE history SET ts=?', (y.isoformat(timespec='milliseconds'),))
+        self.s.conn.execute('DELETE FROM snapshots'); self.s.conn.commit()
+        # today's changes
+        self.s.update(a['id'], text='new name', priority='urgent')
+        self.s.set_done(b['id'], False)
+        self.s.delete(gone['id'])
+        c = self.s.create(parent_id=h['id'], text='created today')
+        yday = y.date().isoformat()
+        snap = self.s.snapshot(yday)
+        self.assertTrue(snap['reconstructed'])
+        by = {n['id']: n for n in snap['nodes']}
+        self.assertEqual(by[a['id']]['text'], 'old name'); self.assertEqual(by[a['id']]['priority'], 'none')
+        self.assertTrue(by[b['id']]['done_at'])
+        self.assertIn(gone['id'], by); self.assertIsNone(by[gone['id']]['archived_at'])
+        self.assertNotIn(c['id'], by)
+        self.assertIsNone(self.s.snapshot((y.date() - datetime.timedelta(days=1)).isoformat()))
+        self.assertEqual(self.s.first_day(), yday)
+        self.assertEqual(self.s.snapshot(datetime.date.today().isoformat())['day'], datetime.date.today().isoformat())  # today has a real snapshot again

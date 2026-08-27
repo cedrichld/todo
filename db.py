@@ -159,11 +159,78 @@ class Store:
         return [r['day'] for r in self.conn.execute('SELECT day FROM snapshots ORDER BY day')]
 
     def snapshot(self, day):
-        """The list as it stood at the end of `day` (the latest snapshot on or before it), or None."""
+        """The list as it stood at the end of `day`: the latest snapshot on or before it, or, before any
+        snapshot existed, a rebuild from the edit history. None when nothing is known about that day."""
         row = self.conn.execute('SELECT day, taken_at, nodes FROM snapshots WHERE day <= ? ORDER BY day DESC LIMIT 1', (day,)).fetchone()
-        if row is None:
+        if row is not None:
+            return {'day': row['day'], 'taken_at': row['taken_at'], 'nodes': json.loads(zlib.decompress(row['nodes']))}
+        return self.reconstruct(day)
+
+    def first_day(self):
+        r = self.conn.execute('SELECT MIN(substr(ts,1,10)) FROM history').fetchone()[0]
+        d = self.conn.execute('SELECT MIN(day) FROM snapshots').fetchone()[0]
+        return min(x for x in (r, d) if x) if (r or d) else None
+
+    def reconstruct(self, day):
+        """Rebuild the list at the end of `day` by undoing, newest first, every logged change made after it,
+        starting from the earliest snapshot (or from now). Approximate: order within a parent and hard
+        deletes are not recoverable."""
+        first = self.first_day()
+        if first is None or day < first:
             return None
-        return {'day': row['day'], 'taken_at': row['taken_at'], 'nodes': json.loads(zlib.decompress(row['nodes']))}
+        base = self.conn.execute('SELECT day, nodes FROM snapshots ORDER BY day LIMIT 1').fetchone()
+        nodes = {n['id']: dict(n) for n in (json.loads(zlib.decompress(base['nodes'])) if base else self.tree())}
+        upto = (base['day'] if base else '9999') + 'T23:59:59.999'
+        rows = self.conn.execute('SELECT * FROM history WHERE ts > ? AND ts <= ? ORDER BY ts DESC, id DESC', (day + 'T23:59:59.999', upto)).fetchall()
+
+        def fetch(nid):
+            r = self.conn.execute('SELECT * FROM nodes WHERE id=?', (nid,)).fetchone()
+            return dict(r) if r else None
+
+        for r in rows:
+            nid, a = r['node_id'], r['action']
+            if a in ('create', 'import'):
+                nodes.pop(nid, None)
+                continue
+            if a == 'restore':  # it was archived at that time
+                nodes.pop(nid, None)
+                continue
+            n = nodes.get(nid)
+            if n is None:  # not in the working set, yet it had a change after `day`: it existed then
+                n = fetch(nid)
+                if n is None:
+                    continue
+                n['archived_at'] = None
+                nodes[nid] = n
+            if a == 'done':
+                n['done_at'] = None
+            elif a == 'undone':
+                n['done_at'] = r['ts']
+            elif a == 'move':
+                n['parent_id'] = int(r['old']) if r['old'] else None
+            elif a == 'edit':
+                f, old = r['field'], r['old'] or ''
+                if f == 'text':
+                    n['text'] = old
+                elif f == 'note':
+                    n['note'] = old or None
+                elif f == 'priority':
+                    n['priority'] = old or 'none'
+                elif f == 'color':
+                    n['color'] = old or None
+                elif f == 'waiting':
+                    n['waiting_on'] = old or None
+                elif f == 'kind':
+                    n['kind'] = old or n['kind']
+                elif f == 'due':
+                    parts = old.split(' ')
+                    n['due_date'] = parts[0] or None
+                    n['due_slot'] = parts[1] if len(parts) > 1 else None
+        for n in nodes.values():
+            if n['parent_id'] is not None and n['parent_id'] not in nodes:
+                n['parent_id'] = None
+        out = sorted(nodes.values(), key=lambda n: (n['parent_id'] or 0, n['position'], n['id']))
+        return {'day': day, 'taken_at': None, 'reconstructed': True, 'nodes': out}
 
     # ------------------------------------------------------------ insights
     def insights(self, today=None):
@@ -171,32 +238,37 @@ class Store:
         start = today - datetime.timedelta(days=RETENTION_DAYS - 1)
         days = [(start + datetime.timedelta(days=i)).isoformat() for i in range(RETENTION_DAYS)]
         idx = {d: i for i, d in enumerate(days)}
-        done = [0] * len(days); created = [0] * len(days); undone = [0] * len(days)
+        done = [0] * len(days); created = [0] * len(days); done_ev = [0] * len(days); undone_ev = [0] * len(days)
         by_hour = [0] * 24; by_dow = [0] * 7; section_done = {}
-        first_day = None
-        sections = {}  # node id -> top-level section text, for nodes still known
-        for r in self.conn.execute("SELECT node_id, ts, action FROM history WHERE action IN ('done','undone','create','import') AND substr(ts,1,10) >= ? ORDER BY ts", (start.isoformat(),)):
+        # A task counts once, on the day it was last ticked and not unticked again: undo/redo and reopenings cancel out.
+        last_done, last_undone = {}, {}
+        for r in self.conn.execute("SELECT node_id, ts, action FROM history WHERE action IN ('done','undone','create','import') ORDER BY ts"):
             d = r['ts'][:10]
+            if r['action'] == 'done':
+                last_done[r['node_id']] = r['ts']
+                if d in idx:
+                    done_ev[idx[d]] += 1
+            elif r['action'] == 'undone':
+                last_undone[r['node_id']] = r['ts']
+                if d in idx:
+                    undone_ev[idx[d]] += 1
+            elif d in idx:
+                created[idx[d]] += 1
+        completed = {nid: ts for nid, ts in last_done.items() if last_undone.get(nid, '') < ts}
+        for nid, ts in completed.items():
+            d = ts[:10]
             if d not in idx:
                 continue
-            first_day = first_day or d
-            i = idx[d]
-            if r['action'] == 'done':
-                done[i] += 1
-                t = datetime.datetime.fromisoformat(r['ts'])
-                by_hour[t.hour] += 1; by_dow[t.weekday()] += 1
-                nid = r['node_id']
-                if nid not in sections:
-                    try:
-                        p = self.path(nid)
-                        sections[nid] = p[0] if p else self.get(nid)['text'] or '(top level)'
-                    except StoreError:
-                        sections[nid] = '(removed)'
-                section_done[sections[nid]] = section_done.get(sections[nid], 0) + 1
-            elif r['action'] == 'undone':
-                undone[i] += 1
-            else:
-                created[i] += 1
+            done[idx[d]] += 1
+            t = datetime.datetime.fromisoformat(ts)
+            by_hour[t.hour] += 1; by_dow[t.weekday()] += 1
+            try:
+                p = self.path(nid)
+                sec = p[0] if p else self.get(nid)['text'] or '(top level)'
+            except StoreError:
+                sec = '(removed)'
+            section_done[sec] = section_done.get(sec, 0) + 1
+        first_day = self.first_day()
         # open tasks per day: real snapshots where we have them, otherwise walked back from today's count
         snaps = {r['day']: r['nodes'] for r in self.conn.execute('SELECT day, nodes FROM snapshots WHERE day >= ?', (start.isoformat(),))}
         live = [n for n in self.tree() if n['kind'] == 'task']
@@ -209,7 +281,7 @@ class Store:
                 nodes = json.loads(zlib.decompress(snaps[d]))
                 cur = sum(1 for n in nodes if n['kind'] == 'task' and not n['done_at'])
             open_series[i] = cur
-            cur = max(0, cur - created[i] + done[i] - undone[i])
+            cur = max(0, cur - created[i] + done_ev[i] - undone_ev[i])
         # streaks: consecutive days with at least one completion, counted back from today (or yesterday)
         streak = 0; i = len(days) - 1
         if done[i] == 0:
@@ -236,7 +308,7 @@ class Store:
             'streak': streak, 'best_streak': best, 'first_day': first_day,
             'totals': {'open': open_now, 'overdue': overdue, 'waiting': sum(1 for n in live if not n['done_at'] and n['waiting_on']),
                        'done_7': sum(done[-7:]), 'done_30': sum(done[-30:]), 'done_365': sum(done),
-                       'created_30': sum(created[-30:]), 'done_all_time': self.conn.execute("SELECT COUNT(*) FROM history WHERE action='done'").fetchone()[0]},
+                       'created_30': sum(created[-30:]), 'done_all_time': len(completed)},
             'snapshot_days': self.snapshot_days(),
         }
 

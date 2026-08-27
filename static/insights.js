@@ -183,7 +183,7 @@ function renderPast(box, day, snap) {
   let doneSince = 0, gone = 0, added = 0, openThen = 0;
   for (const n of past.values()) { if (n.kind === 'task' && !n.done_at) openThen++; const l = live.get(n.id); if (!l) gone++; else if (n.kind === 'task' && !n.done_at && l.done_at) doneSince++; }
   for (const n of live.values()) if (!past.has(n.id) && n.kind === 'task') added++;
-  const when = snap.taken_at ? ` (saved ${fmtTime(snap.taken_at)})` : '';
+  const when = snap.reconstructed ? ' (rebuilt from the edit history — approximate: order within a section is not recorded)' : snap.taken_at ? ` (saved ${fmtTime(snap.taken_at)})` : '';
   box.appendChild(h('p', { class: 'past-summary' },
     h('b', { text: longDay(snap.day) }), snap.day !== day ? ` — the last save before ${shortDay(day)}` : '', when + ' · ',
     `${plural(openThen, 'open task')} then · since: `, h('mark', { class: 'done', text: `${doneSince} completed` }), ', ', h('mark', { class: 'added', text: `${added} added` }), ', ', h('mark', { class: 'gone', text: `${gone} removed` })));
@@ -194,7 +194,7 @@ function renderPast(box, day, snap) {
   for (const el of $$('.node', tree)) {
     const id = +el.dataset.id, n = past.get(id), l = live.get(id);
     $(':scope > .row > .text', el).contentEditable = 'false';
-    const chk = $(':scope > .row > .check', el); if (chk) chk.disabled = true;
+    const chk = $(':scope > .row > .check', el); if (chk) chk.tabIndex = -1;  // stays clickable so the read-only notice can answer
     const mark = !l ? ['gone', 'removed since'] : n.kind === 'task' && !n.done_at && l.done_at ? ['done', 'done since'] : null;
     if (mark) { el.classList.add('since-' + mark[0]); $(':scope > .row', el).insertBefore(h('span', { class: 'since ' + mark[0], text: mark[1] }), $(':scope > .row > .menu', el)); }
   }
@@ -227,7 +227,7 @@ async function renderInsights(main) {
   main.appendChild(card('By weekday', 'which days carry the work', columns(dows, d.by_dow, W, 'var(--viz-green)', 'done', { every: 1, height: 120, peak: true }), [['Weekday', 'Done'], dows.map((x, i) => [x, d.by_dow[i]])]));
   // time travel
   const past = h('section', { class: 'viz past' }, h('header', {}, h('h3', { text: 'Back in time' }), h('p', { text: 'Slide to a day (or click one in the heatmap) to see the list exactly as it was — read-only, with what changed since.' })));
-  const firstSnap = d.snapshot_days[0], minI = firstSnap ? Math.max(0, d.days.indexOf(firstSnap)) : d.days.length - 1;
+  const firstSnap = [d.first_day, d.snapshot_days[0]].filter(Boolean).sort()[0], minI = firstSnap ? Math.max(0, d.days.indexOf(firstSnap)) : d.days.length - 1;
   const slider = h('input', { type: 'range', id: 'past-slider', min: minI, max: d.days.length - 1, value: INS.day ? d.days.indexOf(INS.day) : d.days.length - 1 });
   const lab = h('span', { class: 'past-day', text: INS.day ? longDay(INS.day) : 'today' });
   slider.oninput = () => { lab.textContent = longDay(d.days[+slider.value]); };
@@ -235,5 +235,6 @@ async function renderInsights(main) {
   past.appendChild(h('div', { class: 'past-ctl' }, h('span', { class: 'ax', text: firstSnap ? shortDay(firstSnap) : '' }), slider, h('span', { class: 'ax', text: 'today' }), lab));
   past.appendChild(h('div', { id: 'past' }));
   main.appendChild(past);
+  main.appendChild(h('p', { class: 'ins-foot' }, 'Need the raw log of every change? ', h('a', { href: '#', text: 'Open History', onclick: e => { e.preventDefault(); setView('history'); } }), '.'));
   if (INS.day) pickDay(INS.day);
 }

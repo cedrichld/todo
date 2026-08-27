@@ -369,6 +369,11 @@ function onNoteKey(e, ta, n) {
   if (itemShortcut(e, n)) return;
   if (e.key === 'Enter') { e.preventDefault(); if (!document.execCommand('insertLineBreak')) document.execCommand('insertHTML', false, '<br>'); return; }
 }
+// The back-in-time list is a picture of the past: every edit path lands here instead.
+function pastNotice() {
+  if (Date.now() - (pastNotice.t || 0) < 1500) return; pastNotice.t = Date.now();
+  toast(`Read-only — this is the list as it was on ${INS.day ? longDay(INS.day) : 'that day'}. Switch to All to edit.`);
+}
 function patchNodeDom(n) { const el = $(`.node[data-id="${n.id}"]`); if (el) applyStyle(el, n); }
 
 // ---------------------------------------------------------------- text editing + saving
@@ -687,6 +692,7 @@ function setCurrent(id) {
 }
 function onKey(e) {
   const t = e.target;
+  if (t.closest?.('#past')) { if (!(e.ctrlKey || e.metaKey || e.altKey) || e.key === 'Enter' || e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); pastNotice(); } return; }
   if (t.classList?.contains('note-text')) { const n = nodeOf(t); if (n) { S.current = n.id; onNoteKey(e, t, n); } return; }
   if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
@@ -715,12 +721,13 @@ function onGlobalKey(e) {
   const ctrl = e.ctrlKey || e.metaKey, ae = document.activeElement, tag = ae?.tagName;
   const typing = tag === 'INPUT' || tag === 'TEXTAREA' || ae?.isContentEditable;
   if (ctrl && e.key.toLowerCase() === 'k') { e.preventDefault(); const s = $('#search'); s.focus(); s.select(); return; }
-  if (e.altKey && e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); const i = VIEWS.indexOf(S.view); return setView(VIEWS[(i + (e.key === 'ArrowRight' ? 1 : VIEWS.length - 1)) % VIEWS.length]); }
+  if (e.altKey && e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); const vs = VIEWS.filter(v => v !== 'history' || S.view === 'history'), i = vs.indexOf(S.view); return setView(vs[(i + (e.key === 'ArrowRight' ? 1 : vs.length - 1)) % vs.length]); }
   if (e.key === 'Escape') { closePopover(); clearSelection(); return; }
   if (typing && ae !== document.body) return;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (ae && ae !== document.body && !$('#view').contains(ae)) return;  // top bar buttons keep their normal Tab behaviour
+  if (ae?.closest?.('#past') || S.view === 'insights' || S.view === 'history') { if (S.view === 'insights' && INS.day && ['Enter', 'Delete', 'Backspace'].includes(e.key)) pastNotice(); return; }  // no live items on screen
   const n = nodeOf(ae) || currentNode();
   if (!n) return;
   if (ctrl && e.key.toLowerCase() === 'a' && !e.shiftKey) { e.preventDefault(); return setSelection(visibleNodeEls().map(el => +el.dataset.id), S.current); }
@@ -899,6 +906,7 @@ function helpPanel() {
 function onClick(e) {
   const a = e.target.closest('a.link');
   if (a && $('#view').contains(a)) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); return; }
+  if (e.target.closest('#past')) { if (e.target.closest('.check, .dot, .chip, .wait, .note-preview, .menu')) { e.preventDefault(); pastNotice(); } return; }
   const pv = e.target.closest('.note-preview');
   if (pv && $('#view').contains(pv)) { const n = nodeOf(pv); if (n) { S.current = n.id; toggleNote(n, true); } return; }
   const btn = e.target.closest('button, .check');
@@ -912,17 +920,17 @@ function onClick(e) {
   if (btn.classList.contains('wait')) return openPopover(btn, waitPicker(n));
   if (btn.classList.contains('menu')) return openPopover(btn, nodeMenu(n));
 }
-function onChange(e) { if (e.target.classList?.contains('check')) { const n = nodeOf(e.target); if (n) toggleDone(n); } }
+function onChange(e) { if (e.target.closest?.('#past')) { e.target.checked = !e.target.checked; pastNotice(); return; } if (e.target.classList?.contains('check')) { const n = nodeOf(e.target); if (n) toggleDone(n); } }
 function clearDropMarks() { $$('.row.drop-before, .row.drop-after, .row.drop-into').forEach(r => r.classList.remove('drop-before', 'drop-after', 'drop-into')); }
 function onDragStart(e) {
-  const h = e.target.closest?.('.handle'); if (!h) { e.preventDefault(); return; }
+  const h = e.target.closest?.('.handle'); if (!h || h.closest('#past')) { e.preventDefault(); return; }
   S.drag = +h.closest('.node').dataset.id;
   const ids = S.sel.has(S.drag) ? S.sel : new Set([S.drag]);
   for (const id of ids) $(`.node[data-id="${id}"]`)?.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(S.drag));
 }
 function onDragOver(e) {
-  const row = e.target.closest?.('.row'); if (!row || S.drag == null) return;
+  const row = e.target.closest?.('.row'); if (!row || S.drag == null || row.closest('#past')) return;
   e.preventDefault(); e.dataTransfer.dropEffect = 'move';
   const r = row.getBoundingClientRect(), target = nodeOf(row);
   clearDropMarks();
@@ -930,7 +938,7 @@ function onDragOver(e) {
   else row.classList.add(target && target.kind === 'heading' ? 'drop-into' : 'drop-after');
 }
 function onDrop(e) {
-  const row = e.target.closest?.('.row'); if (!row || S.drag == null) return;
+  const row = e.target.closest?.('.row'); if (!row || S.drag == null || row.closest('#past')) return;
   e.preventDefault();
   const mode = row.classList.contains('drop-before') ? 'before' : row.classList.contains('drop-into') ? 'into' : 'after';
   const target = nodeOf(row), dragged = S.nodes.get(S.drag);
@@ -1038,7 +1046,7 @@ function applyTheme(choice, animate) {
   root.classList.toggle('dark', dark);
   $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
 }
-const VIEWS = ['all', 'today', 'waiting', 'done', 'history', 'insights'];
+const VIEWS = ['all', 'today', 'waiting', 'done', 'insights', 'history'];  // history is tucked away: reached from Insights, shown as a tab only while open
 function setView(v) { S.view = v; localStorage.setItem('view', v); closePopover(); render(); }
 function boot() {
   const view = $('#view');
@@ -1047,8 +1055,9 @@ function boot() {
   view.addEventListener('paste', onPaste);
   view.addEventListener('click', onClick);
   view.addEventListener('change', onChange);
-  view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el) setCurrent(+el.dataset.id); });
+  view.addEventListener('focusin', e => { const el = e.target.closest?.('.node'); if (el && !el.closest('#past')) setCurrent(+el.dataset.id); });
   view.addEventListener('mousedown', e => {
+    if (e.target.closest?.('#past')) { if (e.target.closest('.text, .check, .dot, .chip, .wait, .note-preview, .menu, .note-text') && !e.target.closest('a.link')) { e.preventDefault(); pastNotice(); } return; }
     const el = e.target.closest?.('.node');
     if (!el) { if (!e.target.closest('#popover')) clearSelection(); return; }
     const id = +el.dataset.id;

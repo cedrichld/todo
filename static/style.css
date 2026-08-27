@@ -48,6 +48,7 @@ button { cursor: pointer; }
 #tabs { display: flex; gap: .1rem; background: var(--chip); border-radius: 999px; padding: .18rem; }
 #tabs button { display: flex; align-items: baseline; gap: .3rem; background: none; border: none; font-size: .95rem; color: var(--muted); padding: .16rem .75rem; border-radius: 999px; transition: color .15s var(--ease), background-color .15s var(--ease), box-shadow .15s var(--ease); }
 #tabs button:hover { color: var(--fg); }
+#tabs button.quiet:not(.active) { display: none; }  /* History: only visible while you are in it */
 #tabs button.active { color: var(--fg); font-weight: 600; background: var(--paper); box-shadow: 0 1px 2px rgba(0, 0, 0, .10), 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); }
 #tabs button b { font-weight: 600; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 #tabs button.active b { color: var(--accent); }
@@ -308,9 +309,14 @@ table.history { border-collapse: collapse; width: 100%; font-size: .92rem; font-
 .past-summary mark.done { color: var(--done); } .past-summary mark.added { color: var(--accent); } .past-summary mark.gone { color: var(--urgent); }
 .past-tree { opacity: .92; }
 .past-tree .text { cursor: default; }
+.past-tree .row { cursor: not-allowed; }
+.past-tree .check { pointer-events: auto; cursor: not-allowed; }
+.past-tree .text a.link { cursor: pointer; }
 .past-tree .chip.empty, .past-tree .wait.empty, .past-tree .menu, .past-tree .handle, .past-tree .fold { display: none; }  /* read-only: nothing to add or move */
 .since { font-size: .72rem; border-radius: 999px; padding: .05rem .5rem; align-self: center; white-space: nowrap; flex: none; font-weight: 600; }
 .since.done { color: var(--done); background: color-mix(in srgb, var(--done) 14%, transparent); }
 .since.gone { color: var(--urgent); background: color-mix(in srgb, var(--urgent) 12%, transparent); }
 .node.since-gone > .row > .text { opacity: .55; }
 @media (max-width: 600px) { .viz-grid { grid-template-columns: 1fr; } .stat strong { font-size: 1.6rem; } }
+.ins-foot { margin: 2rem .4rem 0; font-size: .85rem; color: var(--muted); }
+.ins-foot a { color: var(--accent); }
