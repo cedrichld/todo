@@ -103,3 +103,91 @@ class CreateAndUpdate(StoreTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Structure(StoreTestCase):
+    def setUp(self):
+        super().setUp()
+        self.h = self.s.create(kind='heading', text='H')
+        self.a = self.s.create(parent_id=self.h['id'], text='a')
+        self.b = self.s.create(parent_id=self.h['id'], text='b')
+        self.c = self.s.create(parent_id=self.h['id'], text='c')
+
+    def test_done_toggle_logs_and_rejects_headings(self):
+        n = self.s.set_done(self.a['id'], True)
+        self.assertTrue(n['done_at'])
+        self.s.set_done(self.a['id'], True)  # idempotent
+        self.s.set_done(self.a['id'], False)
+        self.assertIsNone(self.s.get(self.a['id'])['done_at'])
+        self.assertEqual([r['action'] for r in self.chrono() if r['node_id'] == self.a['id']],
+                         ['create', 'done', 'undone'])
+        with self.assertRaises(StoreError):
+            self.s.set_done(self.h['id'], True)
+
+    def test_split_uses_client_text_and_places_after(self):
+        head, tail = self.s.split(self.a['id'], 3, text='hello world')
+        self.assertEqual((head['text'], tail['text']), ('hel', 'lo world'))
+        self.assertEqual(self.texts(self.h['id']), ['hel', 'lo world', 'b', 'c'])
+        self.assertEqual(tail['kind'], 'task')
+        edits = [r for r in self.chrono('edit') if r['node_id'] == self.a['id']]
+        self.assertEqual((edits[-1]['old'], edits[-1]['new']), ('a', 'hel'))
+
+    def test_split_can_target_first_child(self):
+        head, tail = self.s.split(self.h['id'], 1, parent_id=self.h['id'], after_id=None)
+        self.assertEqual(self.texts(self.h['id']), ['', 'a', 'b', 'c'])
+        self.assertEqual(head['kind'], 'heading')
+
+    def test_move_within_and_across_parents(self):
+        self.s.move(self.c['id'], self.h['id'], None)
+        self.assertEqual(self.texts(self.h['id']), ['c', 'a', 'b'])
+        self.s.move(self.b['id'], self.a['id'], None)  # b becomes child of a
+        self.assertEqual(self.texts(self.h['id']), ['c', 'a'])
+        self.assertEqual(self.texts(self.a['id']), ['b'])
+        self.assertEqual(self.chrono('move')[-1]['snapshot'], 'b')
+        with self.assertRaises(StoreError):
+            self.s.move(self.a['id'], self.b['id'], None)  # cycle
+        with self.assertRaises(StoreError):
+            self.s.move(self.a['id'], self.a['id'], None)
+        with self.assertRaises(StoreError):
+            self.s.move(self.a['id'], self.h['id'], self.b['id'])  # b is not a child of h
+
+    def test_delete_empty_hard_deletes_and_promotes_children(self):
+        e = self.s.create(parent_id=self.h['id'], after_id=self.a['id'], text='')
+        k1 = self.s.create(parent_id=e['id'], text='k1')
+        k2 = self.s.create(parent_id=e['id'], text='k2')
+        res = self.s.delete(e['id'])
+        self.assertEqual(res, {'id': e['id'], 'hard': True})
+        self.assertEqual(self.texts(self.h['id']), ['a', 'k1', 'k2', 'b', 'c'])
+        self.assertEqual(self.s.get(k1['id'])['parent_id'], self.h['id'])
+        with self.assertRaises(StoreError):
+            self.s.get(e['id'])
+        self.assertFalse([r for r in self.s.history(limit=1000) if r['node_id'] == e['id']])
+        self.assertEqual(self.s.get(k2['id'])['position'], 2)
+
+    def test_delete_nonempty_archives_subtree(self):
+        k = self.s.create(parent_id=self.b['id'], text='kid')
+        res = self.s.delete(self.b['id'])
+        self.assertEqual(res, {'id': self.b['id'], 'hard': False})
+        self.assertEqual(self.texts(self.h['id']), ['a', 'c'])
+        self.assertTrue(self.s.get(k['id'])['archived_at'])
+        self.assertEqual(self.s.get(self.c['id'])['position'], 1)
+        self.assertEqual([r['snapshot'] for r in self.chrono('archive')], ['b', 'kid'])
+
+    def test_archive_done_skips_tasks_with_open_children(self):
+        self.s.set_done(self.a['id'], True)
+        self.s.set_done(self.b['id'], True)
+        self.s.create(parent_id=self.b['id'], text='still open')
+        self.assertEqual(self.s.archive_done(), 1)
+        self.assertEqual(self.texts(self.h['id']), ['b', 'c'])
+        self.s.set_done(self.c['id'], True)
+        self.s.update(self.c['id'], text='c')  # touch; done_at is today
+        self.assertEqual(self.s.archive_done(before='2000-01-01'), 0)
+        self.assertEqual(self.s.archive_done(), 1)
+
+    def test_undone_restores_archived_node_and_parents(self):
+        self.s.set_done(self.a['id'], True)
+        self.s.archive_done()
+        self.s.delete(self.h['id'])  # archive the heading too
+        self.assertEqual(self.s.tree(), [])
+        self.s.set_done(self.a['id'], False)
+        self.assertEqual([n['text'] for n in self.s.tree()], ['H', 'a'])

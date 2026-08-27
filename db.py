@@ -231,3 +231,120 @@ class Store:
             self.conn.execute(f'UPDATE nodes SET {sets}, updated_at=? WHERE id=?',
                               (*changes.values(), ts, node_id))
         return self.get(node_id)
+
+    def _descendants_open(self, node_id):
+        for kid in self._siblings(node_id):
+            k = self.get(kid)
+            if k['kind'] == 'task' and k['done_at'] is None:
+                return True
+            if self._descendants_open(kid):
+                return True
+        return False
+
+    def _archive(self, node_id, ts):
+        kids = self._siblings(node_id)
+        self.conn.execute('UPDATE nodes SET archived_at=?, updated_at=? WHERE id=?', (ts, ts, node_id))
+        self._log(node_id, 'archive', ts=ts)
+        for kid in kids:
+            self._archive(kid, ts)
+
+    def _unarchive_chain(self, node_id, ts):
+        n = self.get(node_id)
+        if n['parent_id'] is not None:
+            self._unarchive_chain(n['parent_id'], ts)
+        if n['archived_at']:
+            self.conn.execute('UPDATE nodes SET archived_at=NULL, updated_at=? WHERE id=?', (ts, node_id))
+            sibs = [s for s in self._siblings(n['parent_id']) if s != node_id]
+            self._place(node_id, n['parent_id'], sibs[-1] if sibs else None)
+            self._log(node_id, 'restore', ts=ts)
+
+    def set_done(self, node_id, done):
+        with self._tx():
+            n = self.get(node_id)
+            if n['kind'] != 'task':
+                raise StoreError('only tasks can be done')
+            if bool(n['done_at']) == bool(done):
+                return n
+            ts = now_iso()
+            self.conn.execute('UPDATE nodes SET done_at=?, updated_at=? WHERE id=?',
+                              (ts if done else None, ts, node_id))
+            self._log(node_id, 'done' if done else 'undone', ts=ts)
+            if not done:
+                self._unarchive_chain(node_id, ts)
+        return self.get(node_id)
+
+    def split(self, node_id, at, text=None, parent_id=_UNSET, after_id=_UNSET):
+        """Cut node text at `at`; the tail becomes a new task. `text` overrides the stored text."""
+        with self._tx():
+            n = self.get(node_id)
+            full = n['text'] if text is None else text
+            self._validate(text=full)
+            at = max(0, min(int(at), len(full)))
+            head, tail = full[:at], full[at:]
+            if head != n['text']:
+                ts = now_iso()
+                self._log_text_edit(node_id, n['text'], head, ts)
+                self.conn.execute('UPDATE nodes SET text=?, updated_at=? WHERE id=?', (head, ts, node_id))
+            if parent_id is _UNSET:
+                parent_id = n['parent_id']
+            if after_id is _UNSET:
+                after_id = node_id
+            new_id = self._create(parent_id, after_id, 'task', tail, 'none', None, None, None, None, 'create')
+        return self.get(node_id), self.get(new_id)
+
+    def move(self, node_id, parent_id, after_id):
+        with self._tx():
+            n = self.get(node_id)
+            p = parent_id
+            while p is not None:
+                if p == node_id:
+                    raise StoreError('cannot move a node under itself')
+                p = self.get(p)['parent_id']
+            if after_id == node_id:
+                raise StoreError('cannot place a node after itself')
+            ts = now_iso()
+            self.conn.execute('UPDATE nodes SET parent_id=?, updated_at=? WHERE id=?', (parent_id, ts, node_id))
+            if n['parent_id'] != parent_id:
+                self._renumber(self._siblings(n['parent_id']))
+            self._place(node_id, parent_id, after_id)
+            self._log(node_id, 'move', old=_s(n['parent_id']), new=_s(parent_id), ts=ts)
+        return self.get(node_id)
+
+    def delete(self, node_id):
+        """Hard-delete an empty node (promoting its children); otherwise archive the subtree."""
+        with self._tx():
+            n = self.get(node_id)
+            if n['text'].strip() == '':
+                kids = self._siblings(node_id)
+                sibs = self._siblings(n['parent_id'])
+                idx = sibs.index(node_id)
+                self.conn.execute('UPDATE nodes SET parent_id=? WHERE parent_id=?', (n['parent_id'], node_id))
+                self._renumber(sibs[:idx] + kids + sibs[idx + 1:])
+                self.conn.execute('DELETE FROM history WHERE node_id=?', (node_id,))
+                self.conn.execute('DELETE FROM nodes WHERE id=?', (node_id,))
+                return {'id': node_id, 'hard': True}
+            self._archive(node_id, now_iso())
+            self._renumber(self._siblings(n['parent_id']))
+            return {'id': node_id, 'hard': False}
+
+    def archive_done(self, before=None):
+        """Archive done tasks (with their subtrees) that have no open descendants. Returns count."""
+        with self._tx():
+            sql = "SELECT id, parent_id FROM nodes WHERE archived_at IS NULL AND kind='task' AND done_at IS NOT NULL"
+            args = []
+            if before:
+                sql += ' AND substr(done_at,1,10) < ?'
+                args.append(before)
+            rows = [dict(r) for r in self.conn.execute(sql, args)]
+            ts = now_iso()
+            count = 0
+            parents = set()
+            for r in rows:
+                if self.get(r['id'])['archived_at'] or self._descendants_open(r['id']):
+                    continue
+                self._archive(r['id'], ts)
+                count += 1
+                parents.add(r['parent_id'])
+            for p in parents:
+                self._renumber(self._siblings(p))
+        return count
