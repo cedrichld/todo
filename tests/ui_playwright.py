@@ -9,7 +9,8 @@ It types into the page like a user would and checks the API after each keystroke
 """
 import asyncio, json, sys, urllib.request
 from playwright.async_api import async_playwright
-SP = '/tmp/claude-1000/-home-user/a57fb13f-6ef3-44f6-a108-75e8652ba515/scratchpad'
+import os, tempfile
+SP = os.environ.get('UI_SHOTS', tempfile.gettempdir())  # where screenshots go
 URL = 'http://127.0.0.1:5799/'
 def tree():
     nodes = json.load(urllib.request.urlopen(URL + 'api/tree'))['nodes']
