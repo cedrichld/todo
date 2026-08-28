@@ -468,7 +468,7 @@ async def main():
         kids = [tree()[i] for i in order_of()]; ranks = [rank(x) for x in kids if x['kind'] == 'task']
         check('switching Auto-sort on orders the section by urgency', ranks == sorted(ranks) and len(ranks) > 3 and 'on' in (await pg.locator('#sort-btn').get_attribute('class') or ''), ranks)
         low = [x for x in kids if x['kind'] == 'task' and x['priority'] != 'urgent' and not x['done_at']][-1]  # the last open non-urgent task: making it urgent must move it up
-        await pg.locator(f'.node[data-id="{low["id"]}"] > .row > .text').click(); await pg.keyboard.press('Control+Shift+Digit1'); await pg.wait_for_timeout(1000)
+        await pg.locator(f'.node[data-id="{low["id"]}"] > .row > .text').click(); await pg.keyboard.press('Control+Shift+Digit1'); await pg.wait_for_timeout(2300)  # the change shows first, the glide follows a second later
         kids2 = [tree()[i] for i in order_of()]
         check('making a task urgent moves it up on its own', tree()[low['id']]['priority'] == 'urgent' and [x['id'] for x in kids2 if x['kind'] == 'task'].index(low['id']) < [x['id'] for x in kids if x['kind'] == 'task'].index(low['id']))
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(1000)

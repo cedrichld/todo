@@ -644,14 +644,29 @@ function sortByUrgency(rootId = null, opts = {}) {
     for (const k of kids) walk(k.id);
   })(rootId);
   if (!changes.length) { if (!opts.auto) toast('Already in order'); return; }
-  const keep = keepFocus();
+  const keep = keepFocus(), before = rowRects();
   return structural(async () => { for (const c of changes) await api.reorder(c.parent_id, c.after); }, () => {
     pushUndo({ type: 'reorder', changes, label: opts.auto ? 'auto-sort' : 'sort by urgency', auto: !!opts.auto });  // auto entries undo together with the change that caused them
     if (!opts.auto) toast(`Sorted ${changes.length === 1 ? 'the section' : changes.length + ' sections'} by urgency — Ctrl+Z to undo`);
     return keep;
-  });
+  }).then(() => glideRows(before));
 }
-const autoSort = () => { if (S.autoSort && S.view === 'all') sortByUrgency(null, { auto: true }); };
+// Rows glide to their new places (FLIP): measure before, redraw, then play each row from where it was to where it is.
+function rowRects() { const m = new Map(); for (const el of $$('#view .node')) m.set(+el.dataset.id, el.getBoundingClientRect().top); return m; }
+function glideRows(before) {
+  if (REDUCED.matches) return;
+  const after = rowRects(), delta = new Map();
+  for (const [id, top] of after) if (before.has(id)) delta.set(id, before.get(id) - top);
+  for (const el of $$('#view .node')) {
+    const id = +el.dataset.id, n = S.nodes.get(id), d = delta.get(id); if (d == null || !n) continue;
+    const pd = n.parent_id != null && delta.has(n.parent_id) ? delta.get(n.parent_id) : 0;  // children ride along with a moved parent
+    const own = d - pd; if (Math.abs(own) < 1) continue;
+    el.animate([{ transform: `translateY(${own}px)` }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.7,.2,1)' });
+  }
+}
+// Auto-sort waits a beat after a change, so the tick or the new colour is seen first, then the rows glide.
+let autoSortTimer = null;
+const autoSort = () => { if (!S.autoSort || S.view !== 'all') return; clearTimeout(autoSortTimer); autoSortTimer = setTimeout(() => { autoSortTimer = null; if (S.autoSort && S.view === 'all') sortByUrgency(null, { auto: true }); }, 1000); };
 function setAutoSort(on) {
   S.autoSort = on; localStorage.setItem('autoSort', on ? '1' : '0');
   const b = $('#sort-btn'); b.classList.toggle('on', on); b.title = on ? 'Auto-sort is on — sections stay in urgency order (click to switch off)' : 'Keep every section sorted by urgency';
