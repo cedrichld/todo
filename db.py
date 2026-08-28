@@ -397,7 +397,21 @@ class Store:
         nid = cur.lastrowid
         self._place(nid, parent_id, after_id)
         self._log(nid, action, snapshot=text, ts=ts)
+        if kind == 'task' and done_at is None:
+            self._reopen_ancestors(parent_id, ts)
         return nid
+
+    def _reopen_ancestors(self, parent_id, ts):
+        """A task is done exactly when all its sub-tasks are: a new open sub-task reopens
+        its done task ancestors (a section heading stops it). Siblings are left alone."""
+        p = parent_id
+        while p is not None:
+            pn = self.get(p)
+            if pn['kind'] != 'task':
+                break
+            if pn['done_at']:
+                self._flip_done(p, False, ts, [])
+            p = pn['parent_id']
 
     # ------------------------------------------------------------ writes
     def create(self, parent_id=None, after_id=_UNSET, kind='task', text='', priority='none',

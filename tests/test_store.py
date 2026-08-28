@@ -249,6 +249,20 @@ class DoneFlow(StoreTestCase):
         self.s.set_done(self.y['id'], True)
         self.assertTrue(self.done(self.p))
 
+    def test_new_sub_task_reopens_a_done_parent(self):
+        self.s.set_done(self.p['id'], True)
+        z = self.s.create(parent_id=self.p['id'], text='z')  # Enter on a done parent
+        self.assertFalse(self.done(self.p)); self.assertFalse(self.done(z))
+        self.assertTrue(self.done(self.x) and self.done(self.y))  # siblings keep their state
+        self.s.set_done(self.p['id'], True)
+        g = self.s.create(parent_id=self.x['id'], text='g')  # deeper: reopens x and p, not the heading
+        self.assertFalse(self.done(self.x) or self.done(self.p)); self.assertTrue(self.done(self.y))
+        self.assertIsNone(self.s.get(self.h['id'])['done_at'])
+        self.s.set_done(self.p['id'], True)
+        _, tail = self.s.split(self.y['id'], 1)  # Enter inside a done child: the new sibling reopens the parent
+        self.assertFalse(self.done(self.p)); self.assertFalse(self.done(tail))
+        self.assertTrue(self.done(self.y))
+
     def test_set_done_many_is_exact(self):
         self.s.set_done(self.x['id'], True)
         self.assertEqual(self.s.set_done_many([self.p['id'], self.y['id']], True), [self.p['id'], self.y['id']])
