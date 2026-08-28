@@ -654,7 +654,7 @@ function sortByUrgency(rootId = null, opts = {}) {
 const autoSort = () => { if (S.autoSort && S.view === 'all') sortByUrgency(null, { auto: true }); };
 function setAutoSort(on) {
   S.autoSort = on; localStorage.setItem('autoSort', on ? '1' : '0');
-  const b = $('#sort-btn'); b.classList.toggle('on', on); b.textContent = on ? 'Auto-sort · on' : 'Auto-sort';
+  const b = $('#sort-btn'); b.classList.toggle('on', on); b.title = on ? 'Auto-sort is on — sections stay in urgency order (click to switch off)' : 'Keep every section sorted by urgency';
   if (on) { toast('Auto-sort on: sections stay in urgency order'); sortByUrgency(null, {}); } else toast('Auto-sort off');
 }
 function moveNode(n, parent_id, after_id, caret, before) {
@@ -1222,7 +1222,7 @@ function boot() {
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
   $('#filter-btn').onclick = e => openPopover(e.target, filterPicker());
   $('#sort-btn').onclick = () => setAutoSort(!S.autoSort);
-  if (S.autoSort) { $('#sort-btn').classList.add('on'); $('#sort-btn').textContent = 'Auto-sort · on'; }
+  if (S.autoSort) { $('#sort-btn').classList.add('on'); $('#sort-btn').title = 'Auto-sort is on — sections stay in urgency order (click to switch off)'; }
   $('#filter-btn').classList.toggle('on', S.filter.size > 0); if (S.filter.size) $('#filter-btn').textContent = `Filter · ${S.filter.size}`;
   applyTheme(localStorage.getItem('theme'), false);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(localStorage.getItem('theme'), false));

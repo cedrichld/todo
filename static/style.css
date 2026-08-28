@@ -94,6 +94,9 @@ button { cursor: pointer; }
 #hide-done { appearance: none; width: .9rem; height: .9rem; margin: 0; border: 1.5px solid var(--faint); border-radius: 4px; background: var(--paper); transition: background-color .15s, border-color .15s; }
 #hide-done:checked { background: var(--accent) var(--i-check) center / 80% no-repeat; border-color: var(--accent); }
 #filter-btn.on { color: var(--fg); background: var(--chip); }
+/* the auto-sort switch: hollow when off, filled green when on */
+#sort-btn.on { color: #fff; background: var(--done); border-color: var(--done); }
+#sort-btn.on:hover { background: color-mix(in srgb, var(--done) 88%, black); border-color: color-mix(in srgb, var(--done) 88%, black); color: #fff; }
 .filter-list { display: flex; flex-direction: column; gap: .15rem; min-width: 11rem; }
 .filter-list label { cursor: pointer; }
 .filter-list label input { accent-color: var(--accent); margin: 0; }
