@@ -94,9 +94,13 @@ button { cursor: pointer; }
 #hide-done { appearance: none; width: .9rem; height: .9rem; margin: 0; border: 1.5px solid var(--faint); border-radius: 4px; background: var(--paper); transition: background-color .15s, border-color .15s; }
 #hide-done:checked { background: var(--accent) var(--i-check) center / 80% no-repeat; border-color: var(--accent); }
 #filter-btn.on { color: var(--fg); background: var(--chip); }
-/* the auto-sort switch: hollow when off, filled green when on */
-#sort-btn.on { color: #fff; background: var(--done); border-color: var(--done); }
-#sort-btn.on:hover { background: color-mix(in srgb, var(--done) 88%, black); border-color: color-mix(in srgb, var(--done) 88%, black); color: #fff; }
+/* the auto-sort switch: hollow when off; when switched on the green floods out radially from where you clicked */
+#sort-btn { position: relative; overflow: hidden; isolation: isolate; transition: color .25s var(--ease), border-color .25s var(--ease); }
+#sort-btn::before { content: ""; position: absolute; inset: -1px; z-index: -1; background: var(--done); clip-path: circle(0% at var(--x, 50%) var(--y, 50%)); transition: clip-path .38s var(--ease); }
+#sort-btn.on { color: #fff; border-color: var(--done); background: none; }
+#sort-btn.on::before { clip-path: circle(130% at var(--x, 50%) var(--y, 50%)); }
+#sort-btn.on:hover { color: #fff; background: none; }
+@media (prefers-reduced-motion: reduce) { #sort-btn::before { transition: none; } }
 .filter-list { display: flex; flex-direction: column; gap: .15rem; min-width: 11rem; }
 .filter-list label { cursor: pointer; }
 .filter-list label input { accent-color: var(--accent); margin: 0; }

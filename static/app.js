@@ -1221,7 +1221,7 @@ function boot() {
   $('#archive-done').onclick = archiveAllDone;
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
   $('#filter-btn').onclick = e => openPopover(e.target, filterPicker());
-  $('#sort-btn').onclick = () => setAutoSort(!S.autoSort);
+  $('#sort-btn').onclick = e => { const b = e.currentTarget, r = b.getBoundingClientRect(); b.style.setProperty('--x', `${(e.clientX - r.left) / r.width * 100}%`); b.style.setProperty('--y', `${(e.clientY - r.top) / r.height * 100}%`); setAutoSort(!S.autoSort); };
   if (S.autoSort) { $('#sort-btn').classList.add('on'); $('#sort-btn').title = 'Auto-sort is on — sections stay in urgency order (click to switch off)'; }
   $('#filter-btn').classList.toggle('on', S.filter.size > 0); if (S.filter.size) $('#filter-btn').textContent = `Filter · ${S.filter.size}`;
   applyTheme(localStorage.getItem('theme'), false);
