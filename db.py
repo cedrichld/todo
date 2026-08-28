@@ -97,6 +97,7 @@ class Store:
         self.md_path = md_path
         self.lock = threading.RLock()
         self._prune()
+        self._compact_history()
         self._snapshot()
 
     def _migrate(self):
@@ -172,8 +173,8 @@ class Store:
 
     def reconstruct(self, day):
         """Rebuild the list at the end of `day` by undoing, newest first, every logged change made after it,
-        starting from the earliest snapshot (or from now). Approximate: order within a parent and hard
-        deletes are not recoverable."""
+        starting from the earliest snapshot (or from now). Approximate: order within a parent, hard
+        deletes, and ticks that were unticked again (their rows cancel) are not recoverable."""
         first = self.first_day()
         if first is None or day < first:
             return None
@@ -511,9 +512,39 @@ class Store:
         return self.conn.execute('SELECT * FROM nodes WHERE parent_id=? AND archived_at IS NULL ORDER BY position, id',
                                  (node_id,)).fetchall()
 
+    def _log_done(self, node_id, done, ts):
+        """A tick that follows an untick, or an untick that follows a tick, says nothing worth keeping:
+        the earlier row goes instead of a new one piling up, so toggling never clutters the history."""
+        last = self.conn.execute("SELECT id, action FROM history WHERE node_id=? AND action IN ('done','undone') "
+                                 "ORDER BY ts DESC, id DESC LIMIT 1", (node_id,)).fetchone()
+        if last is not None and last['action'] == 'done' and not done:
+            self.conn.execute('DELETE FROM history WHERE id=?', (last['id'],))
+            return
+        if last is not None and last['action'] == 'undone' and done:
+            self.conn.execute('DELETE FROM history WHERE id=?', (last['id'],))
+        self._log(node_id, 'done' if done else 'undone', ts=ts)
+
+    def _compact_history(self):
+        """Apply the same rule to what is already logged: done→undone pairs cancel, repeated ticks keep the last one."""
+        rows = self.conn.execute("SELECT id, node_id, action FROM history WHERE action IN ('done','undone') ORDER BY node_id, ts, id").fetchall()
+        drop, pending = [], {}  # node_id -> id of the latest kept done/undone row and its action
+        for r in rows:
+            prev = pending.get(r['node_id'])
+            if prev and prev[1] == 'done' and r['action'] == 'undone':
+                drop += [prev[0], r['id']]; pending.pop(r['node_id']); continue
+            if prev and prev[1] == r['action']:
+                drop.append(prev[0])
+            if prev and prev[1] == 'undone' and r['action'] == 'done':
+                drop.append(prev[0])
+            pending[r['node_id']] = (r['id'], r['action'])
+        if drop:
+            with self.conn:
+                self.conn.executemany('DELETE FROM history WHERE id=?', [(i,) for i in drop])
+        return len(drop)
+
     def _flip_done(self, node_id, done, ts, changed):
         self.conn.execute('UPDATE nodes SET done_at=?, updated_at=? WHERE id=?', (ts if done else None, ts, node_id))
-        self._log(node_id, 'done' if done else 'undone', ts=ts)
+        self._log_done(node_id, done, ts)
         if not done:
             self._unarchive_chain(node_id, ts)
         changed.append(node_id)

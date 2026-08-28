@@ -208,6 +208,11 @@ a.link:hover { text-decoration-color: var(--accent); background: color-mix(in sr
 .row:hover .chip.empty, .row:focus-within .chip.empty, .row:hover .wait.empty, .row:focus-within .wait.empty { max-width: 8rem; padding-inline: .58rem; opacity: 1; }
 .chip.today { color: var(--today); background: color-mix(in srgb, var(--today) 14%, transparent); font-weight: 600; }
 .chip.overdue { background: var(--urgent); color: #fff; font-weight: 600; }
+/* a parent's sub-task due dates, in one quiet line */
+.kids-due { font-family: var(--sans); font-size: .66rem; color: var(--muted); white-space: nowrap; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; align-self: center; flex: none; letter-spacing: .01em; }
+.kids-due:empty { display: none; }
+.kids-due.soon { color: var(--today); }
+@media (max-width: 600px) { .kids-due { display: none; } }
 /* waiting on someone: hatched row + violet chip, still a normal todo */
 .node.waiting > .row { background-image: repeating-linear-gradient(135deg, transparent 0 8px, color-mix(in srgb, var(--wait) 10%, transparent) 8px 10px); }
 .wait { display: inline-flex; align-items: center; gap: .3rem; background: color-mix(in srgb, var(--wait) 14%, transparent); color: var(--wait); font-weight: 600; }

@@ -124,7 +124,7 @@ class Structure(StoreTestCase):
         self.s.set_done(self.a['id'], False)
         self.assertIsNone(self.s.get(self.a['id'])['done_at'])
         self.assertEqual([r['action'] for r in self.chrono() if r['node_id'] == self.a['id']],
-                         ['create', 'done', 'undone'])
+                         ['create'])  # a tick followed by an untick cancels out)
         with self.assertRaises(StoreError):
             self.s.set_done(self.h['id'], True)
 
@@ -573,7 +573,8 @@ class Reconstruct(StoreTestCase):
         self.assertTrue(snap['reconstructed'])
         by = {n['id']: n for n in snap['nodes']}
         self.assertEqual(by[a['id']]['text'], 'old name'); self.assertEqual(by[a['id']]['priority'], 'none')
-        self.assertTrue(by[b['id']]['done_at'])
+        # b was ticked yesterday and unticked today: the pair cancelled, so the rebuild cannot know it was briefly done
+        self.assertIsNone(by[b['id']]['done_at'])
         self.assertIn(gone['id'], by); self.assertIsNone(by[gone['id']]['archived_at'])
         self.assertNotIn(c['id'], by)
         self.assertIsNone(self.s.snapshot((y.date() - datetime.timedelta(days=1)).isoformat()))
@@ -591,3 +592,35 @@ class Reorder(StoreTestCase):
         with self.assertRaises(StoreError):
             self.s.reorder(h['id'], [a['id'], b['id']])
         self.assertEqual(self.chrono('move')[-1]['old'], 'reorder')
+
+
+class DoneHistory(StoreTestCase):
+    """Toggling leaves no trace: a tick then an untick cancel, an untick then a tick keep one done row."""
+
+    def rows(self, nid):
+        return [r['action'] for r in self.chrono() if r['node_id'] == nid and r['action'] in ('done', 'undone')]
+
+    def test_toggling_cancels_and_final_state_keeps_one_row(self):
+        h = self.s.create(kind='heading', text='H')
+        t = self.s.create(parent_id=h['id'], text='t')
+        self.s.set_done(t['id'], True); self.s.set_done(t['id'], False)
+        self.assertEqual(self.rows(t['id']), [])
+        self.s.set_done(t['id'], True); self.s.set_done(t['id'], False); self.s.set_done(t['id'], True)
+        self.assertEqual(self.rows(t['id']), ['done'])
+        self.assertEqual(self.s.insights()['totals']['done_all_time'], 1)
+        # a task that arrived done (no done row) and is reopened keeps its undone row until it is done again
+        d = self.s.create(parent_id=h['id'], text='d', done_at='2026-08-20T09:00:00+00:00')
+        self.s.set_done(d['id'], False)
+        self.assertEqual(self.rows(d['id']), ['undone'])
+        self.s.set_done(d['id'], True)
+        self.assertEqual(self.rows(d['id']), ['done'])
+
+    def test_compaction_cleans_an_old_log(self):
+        h = self.s.create(kind='heading', text='H')
+        t = self.s.create(parent_id=h['id'], text='t')
+        for i, a in enumerate(['done', 'undone', 'done', 'undone', 'done', 'done', 'undone', 'done']):
+            self.s.conn.execute("INSERT INTO history(node_id, ts, action, snapshot) VALUES (?,?,?,?)", (t['id'], f'2026-08-2{i}T09:00:00+00:00', a, 't'))
+        self.s.conn.commit()
+        self.assertEqual(self.s._compact_history(), 7)
+        self.assertEqual(self.rows(t['id']), ['done'])
+        self.assertEqual(self.s._compact_history(), 0)

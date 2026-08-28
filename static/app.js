@@ -262,7 +262,7 @@ function renderNode(n, depth, match, forceOpen, flat) {
     (isTask ? `<button class="dot" tabindex="-1" title="Priority"></button>` : '') +
     `<span class="text" contenteditable="true" spellcheck="false"></span>` +
     `<span class="note-preview" title="Show note (Ctrl+.)"></span>` +
-    (isTask ? `<button class="chip" tabindex="-1" title="Due (Ctrl+D)"></button>` : '') +
+    (isTask ? `<button class="chip" tabindex="-1" title="Due (Ctrl+D)"></button><span class="kids-due"></span>` : '') +
     (isTask ? `<button class="wait" tabindex="-1"></button>` : '') +
     `<button class="menu" tabindex="-1" title="More"></button>`;
   const t = $('.text', row);
@@ -304,6 +304,14 @@ function applyStyle(el, n) {
     chip.classList.toggle('empty', !n.due_date);
     chip.classList.toggle('overdue', isOverdue(n));
     chip.classList.toggle('today', n.due_date === todayISO() && !n.done_at);
+  }
+  const kd = $(':scope > .row > .kids-due', el);
+  if (kd) {  // what the sub-tasks are due, in one subtle line: nearest first, trimmed with an ellipsis
+    const dates = new Set(); (function walk(id) { for (const k of kidsOf(id)) { if (k.kind === 'task' && !k.done_at && k.due_date) dates.add(k.due_date); walk(k.id); } })(n.id);
+    const list = [...dates].sort(), t = todayISO();
+    kd.textContent = list.length ? '↳ ' + list.slice(0, 3).map(d => chipText({ due_date: d })).join(' · ') + (list.length > 3 ? ' …' : '') : '';
+    kd.title = list.length ? `Sub-tasks due: ${list.map(fmtDay).join(', ')}` : '';
+    kd.classList.toggle('soon', list.length > 0 && list[0] <= t);
   }
   const waiting = !!n.waiting_on && !n.done_at;
   el.classList.toggle('waiting', waiting);

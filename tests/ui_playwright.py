@@ -477,6 +477,11 @@ async def main():
         check('Auto-sort switches off', 'on' not in (await pg.locator('#sort-btn').get_attribute('class') or ''))
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(900)
         check('and the first sort can be undone too', order_of() == before_order)
+        # --- a parent shows what its sub-tasks are due
+        par2 = by_text(tree(), 'Reach out to ppl'); kid = by_text(tree(), 'Jordan reachout')
+        urllib.request.urlopen(urllib.request.Request(URL + f'api/nodes/{kid["id"]}', data=json.dumps({'due_date': (__import__('datetime').date.today() + __import__('datetime').timedelta(days=1)).isoformat()}).encode(), method='PATCH', headers={'Content-Type': 'application/json'})).read()
+        await pg.reload(); await pg.wait_for_selector('.node'); await pg.wait_for_timeout(300)
+        check("the parent's row lists its sub-tasks' due dates", 'Tomorrow' in await pg.locator(f'.node[data-id="{par2["id"]}"] > .row > .kids-due').text_content())
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))
