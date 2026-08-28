@@ -580,6 +580,21 @@ class Store:
             new_id = self._create(parent_id, after_id, 'task', tail, 'none', None, None, None, None, 'create')
         return self.get(node_id), self.get(new_id)
 
+    def reorder(self, parent_id, ids):
+        """Set the order of parent_id's live children to `ids` (must be exactly that set). One history row."""
+        with self._tx():
+            sibs = self._siblings(parent_id)
+            if sorted(sibs) != sorted(int(i) for i in ids):
+                raise StoreError('ids must be exactly the children of the parent')
+            if list(sibs) == [int(i) for i in ids]:
+                return {'parent_id': parent_id, 'ids': sibs}
+            self._renumber([int(i) for i in ids])
+            ts = now_iso()
+            for i in ids:
+                self.conn.execute('UPDATE nodes SET updated_at=? WHERE id=?', (ts, int(i)))
+            self._log(int(ids[0]), 'move', old='reorder', new=f'{len(ids)} siblings', ts=ts)
+        return {'parent_id': parent_id, 'ids': [int(i) for i in ids]}
+
     def move(self, node_id, parent_id, after_id):
         with self._tx():
             n = self.get(node_id)

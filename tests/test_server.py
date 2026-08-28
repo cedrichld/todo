@@ -38,6 +38,7 @@ class Api(unittest.TestCase):
         self.assertEqual(self.call('POST', '/api/done-batch', {'ids': [t['id']], 'done': False}), {'ids': [t['id']]})
         self.assertTrue(self.call('POST', f"/api/nodes/{t['id']}/done", {'done': True})['changed'], [t['id']])
         self.assertEqual({n['id'] for n in self.call('GET', '/api/done-tree')['nodes']}, {h['id'], t['id']})
+        self.assertEqual(self.call('POST', '/api/reorder', {'parent_id': h['id'], 'ids': [t['id']]})['ids'], [t['id']])
         self.assertEqual(self.call('GET', '/api/insights')['totals']['done_all_time'], 1)  # done, undone, done again: one task
         self.assertEqual(self.call('GET', f'/api/snapshot/{_dt.date.today().isoformat()}')['day'], _dt.date.today().isoformat())
         self.assertEqual(self.call('GET', '/api/snapshot/2000-01-01')['nodes'], [])

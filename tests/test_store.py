@@ -579,3 +579,15 @@ class Reconstruct(StoreTestCase):
         self.assertIsNone(self.s.snapshot((y.date() - datetime.timedelta(days=1)).isoformat()))
         self.assertEqual(self.s.first_day(), yday)
         self.assertEqual(self.s.snapshot(datetime.date.today().isoformat())['day'], datetime.date.today().isoformat())  # today has a real snapshot again
+
+
+class Reorder(StoreTestCase):
+    def test_reorder_sets_positions_and_rejects_other_sets(self):
+        h = self.s.create(kind='heading', text='H')
+        a = self.s.create(parent_id=h['id'], text='a'); b = self.s.create(parent_id=h['id'], text='b'); c = self.s.create(parent_id=h['id'], text='c')
+        r = self.s.reorder(h['id'], [c['id'], a['id'], b['id']])
+        self.assertEqual(r['ids'], [c['id'], a['id'], b['id']])
+        self.assertEqual([n['text'] for n in self.s.tree() if n['parent_id'] == h['id']], ['c', 'a', 'b'])
+        with self.assertRaises(StoreError):
+            self.s.reorder(h['id'], [a['id'], b['id']])
+        self.assertEqual(self.chrono('move')[-1]['old'], 'reorder')

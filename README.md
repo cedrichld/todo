@@ -45,6 +45,7 @@ Tests: `python3 -m unittest discover -s tests -v`
 | Ctrl+B | waiting on someone / something (works from the title, the note, or a selected row — as do Ctrl+D, Ctrl+., priorities and Ctrl+/) — the row gets hatched with a ⏳ chip showing who and for how long; bump or clear from the same popover. The Waiting tab lists them oldest first |
 | Ctrl+Shift+H | heading ↔ task |
 | Ctrl+K | search |
+| Sort (top bar) | sort every section by urgency: sub-sections first (as they were), then tasks urgent → soon → normal → later → custom → none, open before done, earlier due date first; `⋯` on a section sorts just that one. One Ctrl+Z puts everything back |
 | Filter (top bar) | show only some priorities — urgent / soon / normal / later / custom colour / none — in every tab |
 | Esc | close popover / unfocus |
 

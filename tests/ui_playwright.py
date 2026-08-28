@@ -457,6 +457,16 @@ async def main():
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(700)
         t4 = tree(); check('one Ctrl+Z reverts the whole batch', t4[pa['id']]['priority'] == 'urgent' and t4[pb['id']]['priority'] == 'urgent')
         await pg.keyboard.press('Escape')
+        # --- sort by urgency
+        sec = by_text(tree(), 'Racer - Conf 2026')
+        before_order = [n['id'] for n in sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])]
+        await pg.click('#sort-btn'); await pg.wait_for_timeout(900)
+        kids = sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])
+        ranks = [(1 if x['done_at'] else 0, {'urgent': 0, 'soon': 1, 'normal': 2, 'later': 3, 'none': 5}[x['priority']] if not (x['color'] and x['priority'] == 'none') else 4) for x in kids if x['kind'] == 'task']
+        check('Sort orders a section by urgency', ranks == sorted(ranks) and len(ranks) > 3, ranks)
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(900)
+        after_undo = [n['id'] for n in sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])]
+        check('one Ctrl+Z restores the previous order everywhere', after_undo == before_order)
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))

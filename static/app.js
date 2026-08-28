@@ -43,6 +43,7 @@ const api = {
   patch: (id, b) => api.req('PATCH', `/api/nodes/${id}`, b),
   done: (id, done) => api.req('POST', `/api/nodes/${id}/done`, { done }),
   doneBatch: (ids, done) => api.req('POST', '/api/done-batch', { ids, done }),
+  reorder: (parent_id, ids) => api.req('POST', '/api/reorder', { parent_id, ids }),
   move: (id, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/move`, { parent_id, after_id }),
   split: (id, at, text, parent_id, after_id) => api.req('POST', `/api/nodes/${id}/split`, { at, text, parent_id, after_id }),
   del: (id, hard) => api.req('DELETE', `/api/nodes/${id}${hard ? '?hard=1' : ''}`),
@@ -490,6 +491,9 @@ async function applyEntry(e, dir) {
     case 'archive':
       if (dir === 'undo') { await restoreAt(id, e.parent_id, e.after_id); return { id, caret: 'end' }; }
       await api.del(id); return null;
+    case 'reorder':
+      for (const c of e.changes) await api.reorder(rid(c.parent_id), (dir === 'undo' ? c.before : c.after).map(rid));
+      return null;
     case 'patchMany':
       for (const it of e.items) await api.patch(rid(it.id), dir === 'undo' ? it.old : it.new);
       return null;
@@ -617,6 +621,29 @@ function moveMany(nodes, parent_id, after_id, before) {
       after = n.id;
     }
   }, () => { if (moves.length) pushUndo({ type: 'moveMany', moves, label: `move ${moves.length} items` }); return null; });
+}
+// Sort by urgency: within every parent under `root` (or the whole list), sub-sections keep their order and come first,
+// then tasks by priority (custom colour after later, none last), open before done, earlier due date first, ties keep their order.
+const URGENCY = { urgent: 0, soon: 1, normal: 2, later: 3, none: 5 };
+const urgencyKey = n => [n.done_at ? 1 : 0, n.color && n.priority === 'none' ? 4 : URGENCY[n.priority] ?? 5, n.due_date || '9999'];
+function sortByUrgency(rootId = null) {
+  const changes = [];
+  (function walk(pid) {
+    const kids = kidsOf(pid);
+    if (kids.length > 1) {
+      const heads = kids.filter(k => k.kind === 'heading'), tasks = kids.filter(k => k.kind === 'task');
+      const sorted = [...heads, ...tasks.map((t, i) => [t, i]).sort((a, b) => { const ka = urgencyKey(a[0]), kb = urgencyKey(b[0]); for (let j = 0; j < 3; j++) if (ka[j] !== kb[j]) return ka[j] < kb[j] ? -1 : 1; return a[1] - b[1]; }).map(x => x[0])];
+      const before = kids.map(k => k.id), after = sorted.map(k => k.id);
+      if (before.join() !== after.join()) changes.push({ parent_id: pid, before, after });
+    }
+    for (const k of kids) walk(k.id);
+  })(rootId);
+  if (!changes.length) return toast('Already in order');
+  return structural(async () => { for (const c of changes) await api.reorder(c.parent_id, c.after); }, () => {
+    pushUndo({ type: 'reorder', changes, label: 'sort by urgency' });
+    toast(`Sorted ${changes.length === 1 ? 'the section' : changes.length + ' sections'} by urgency — Ctrl+Z to undo`);
+    return null;
+  });
 }
 function moveNode(n, parent_id, after_id, caret, before) {
   const from = placeOf(n);
@@ -893,6 +920,7 @@ function nodeMenu(n) {
     ['Move down', 'Alt+↓', () => moveVert(n, 1, caret())],
     null,
     [n.note ? (S.noteOpen.has(n.id) ? 'Hide note' : 'Show note') : 'Add note', 'Ctrl+.', () => toggleNote(n, true)],
+    kidsOf(n.id).length > 1 ? [n.kind === 'heading' ? 'Sort section by urgency' : 'Sort sub-tasks by urgency', '', () => sortByUrgency(n.id)] : null,
     [n.kind === 'task' ? 'Make heading' : 'Make task', 'Ctrl+Shift+H', () => toggleKind(n, caret())],
     n.kind === 'task' ? [n.done_at ? 'Mark not done' : 'Mark done', 'Ctrl+Enter', () => toggleDone(n)] : null,
     n.kind === 'task' ? [n.waiting_on ? `Waiting on ${n.waiting_on}…` : 'Waiting on…', 'Ctrl+B', () => openPopover(anchor() || document.body, waitPicker(n)), true] : null,
@@ -1180,6 +1208,7 @@ function boot() {
   $('#archive-done').onclick = archiveAllDone;
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
   $('#filter-btn').onclick = e => openPopover(e.target, filterPicker());
+  $('#sort-btn').onclick = () => sortByUrgency(null);
   $('#filter-btn').classList.toggle('on', S.filter.size > 0); if (S.filter.size) $('#filter-btn').textContent = `Filter · ${S.filter.size}`;
   applyTheme(localStorage.getItem('theme'), false);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(localStorage.getItem('theme'), false));
