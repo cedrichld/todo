@@ -140,7 +140,7 @@ button { cursor: pointer; }
 .text { flex: 1 1 auto; min-width: 2rem; outline: none; white-space: pre-wrap; word-break: break-word; padding: .02rem .3rem; border-radius: var(--r-s); transition: background-color .15s var(--ease), color .2s var(--ease), opacity .2s var(--ease); }
 .text:focus { background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
 .text:empty::before { content: attr(data-placeholder); color: var(--muted); opacity: .6; font-style: italic; }
-.node.current > .row:not(:focus-within) { background-color: var(--hover); }  /* selected but not being typed in: Delete acts on it */
+/* a picked row is shown by .selected (blue); .current alone carries no tint */
 .node.selected > .row, .node.selected > .row:hover { background-color: color-mix(in srgb, var(--accent) 13%, transparent); }
 /* a faint rule where a parent task's sub-tasks end */
 .node.task.has-kids:not(.collapsed) > .kids { border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent); padding-bottom: .12rem; margin-bottom: .3rem; }

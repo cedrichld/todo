@@ -432,7 +432,7 @@ async def main():
         # --- clicking the paper lets go of everything
         bg = by_text(tree(), 'Jordan reachout')
         await pg.locator(f'.node[data-id="{bg["id"]}"] > .row').click(position={'x': 4, 'y': 6})
-        check('a clicked row is highlighted', await pg.locator('#view .node.current').count() == 1)
+        check('a clicked row is picked (blue selection)', await pg.locator('#view .node.selected').count() == 1)
         await pg.mouse.click(5, 400)  # the page margin, left of the outline
         await pg.wait_for_timeout(150)
         check('clicking the paper clears the highlight and selection', await pg.locator('#view .node.current, #view .node.selected').count() == 0 and await pg.evaluate('S.current') is None)
@@ -445,6 +445,17 @@ async def main():
         check('the Filter button says it is active', 'on' in (await pg.locator('#filter-btn').get_attribute('class') or ''))
         await pg.locator('#popover .filter-list button', has_text='Clear').click(); await pg.wait_for_timeout(400)
         check('clearing the filter shows everything again', await pg.locator('#view .node').count() > 100)
+        await pg.keyboard.press('Escape')
+        # --- priority / colour on a whole selection
+        pa = by_text(tree(), 'Slack repost'); pb = by_text(tree(), 'Jordan reachout')
+        await pg.locator(f'.node[data-id="{pa["id"]}"] > .row').click(position={'x': 4, 'y': 6})
+        await pg.locator(f'.node[data-id="{pb["id"]}"] > .row').click(position={'x': 4, 'y': 6}, modifiers=['Shift'])
+        await pg.locator(f'.node[data-id="{pa["id"]}"] > .row > .dot').click(); await pg.wait_for_timeout(200)
+        check('clicking a control of a selected row keeps the selection', await pg.locator('#view .node.selected').count() >= 2)
+        await pg.locator('#popover .swatch[data-prio=later]').click(); await pg.wait_for_timeout(700)
+        t3 = tree(); check('a priority picked on one selected row applies to all of them', t3[pa['id']]['priority'] == 'later' and t3[pb['id']]['priority'] == 'later')
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(700)
+        t4 = tree(); check('one Ctrl+Z reverts the whole batch', t4[pa['id']]['priority'] == 'urgent' and t4[pb['id']]['priority'] == 'urgent')
         await pg.keyboard.press('Escape')
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)

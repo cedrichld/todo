@@ -490,6 +490,9 @@ async function applyEntry(e, dir) {
     case 'archive':
       if (dir === 'undo') { await restoreAt(id, e.parent_id, e.after_id); return { id, caret: 'end' }; }
       await api.del(id); return null;
+    case 'patchMany':
+      for (const it of e.items) await api.patch(rid(it.id), dir === 'undo' ? it.old : it.new);
+      return null;
     case 'archiveMany':
       if (dir === 'undo') { for (const p of e.places) await restoreAt(rid(p.id), p.parent_id, p.after_id); return null; }
       for (const p of e.places) await api.del(rid(p.id)); return null;
@@ -547,9 +550,17 @@ function toggleDone(n) {
     if (S.hideDone || S.view !== 'all') render();
   }).catch(showError);
 }
-function setPriority(n, p) { if (n.kind !== 'task') return; patchFields(n, { priority: p, color: null }, 'priority').catch(showError); patchNodeDom(n); }
-function setColor(n, hex) { patchFields(n, { color: hex }, 'color').catch(showError); patchNodeDom(n); }
-function setDue(n, date, slot) { patchFields(n, { due_date: date, due_slot: date ? slot : null }, 'due date').catch(showError); patchNodeDom(n); }
+// A change made on one row of a selection is made on every selected task, as one undo step.
+const withSelection = n => S.sel.size > 1 && S.sel.has(n.id) ? [...S.sel].map(getNode).filter(x => x && x.kind === 'task') : [n];
+function patchMany(nodes, fields, label) {
+  if (nodes.length === 1) { patchFields(nodes[0], fields, label).catch(showError); patchNodeDom(nodes[0]); return; }
+  const items = nodes.map(x => { const old = {}; for (const k of Object.keys(fields)) old[k] = x[k]; Object.assign(x, fields); patchNodeDom(x); return { id: x.id, old, new: { ...fields } }; });
+  pushUndo({ type: 'patchMany', items, label: `${label} × ${nodes.length}` });
+  queue.run(async () => { for (const it of items) { const r = await api.patch(it.id, it.new); const x = getNode(it.id); if (x) { for (const k of ['priority', 'color', 'auto_urgent']) if (r[k] !== x[k]) { it.new[k] = r[k]; x[k] = r[k]; } patchNodeDom(x); } } }).catch(showError);
+}
+function setPriority(n, p) { if (n.kind !== 'task') return; patchMany(withSelection(n), { priority: p, color: null }, 'priority'); }
+function setColor(n, hex) { patchMany(withSelection(n), { color: hex }, 'color'); }
+function setDue(n, date, slot) { patchMany(withSelection(n), { due_date: date, due_slot: date ? slot : null }, 'due date'); }
 function toggleFold(n) {
   n.collapsed = n.collapsed ? 0 : 1; render();
   queue.run(() => api.patch(n.id, { collapsed: !!n.collapsed })).catch(showError);
@@ -716,7 +727,7 @@ function onKey(e) {
   setCurrent(n.id);
   const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
   const caret = () => caretOffset(t);
-  if (e.key === 'Escape') { closePopover(); t.blur(); return; }
+  if (e.key === 'Escape') { closePopover(); t.blur(); setSelection([n.id], n.id); return; }  // leave the words, keep the row picked
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (itemShortcut(e, n, caret)) return;
@@ -1154,8 +1165,9 @@ function boot() {
       else { const next = new Set(S.sel); if (!next.size && S.current != null && S.current !== id) next.add(S.current); next.has(id) ? next.delete(id) : next.add(id); setSelection(next, S.selAnchor ?? S.current ?? id); }
       setCurrent(id); return;
     }
-    if (!(S.sel.has(id) && e.target.closest('.handle'))) clearSelection();
-    setCurrent(id);
+    if (e.target.closest('.text, .note-text, a.link')) { clearSelection(); setCurrent(id); return; }  // editing: caret, no selection
+    if (S.sel.has(id) && e.target.closest('.handle, .dot, .chip, .wait, .menu, .check, .note-preview')) { setCurrent(id); return; }  // acting on the selection
+    setSelection([id], id); setCurrent(id);
   });
   view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); if (e.target.classList?.contains('note-text')) flushNote(+e.target.closest('.node').dataset.id); });
   view.addEventListener('beforeinput', e => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); runUndo(e.inputType === 'historyUndo' ? 'undo' : 'redo'); } });
