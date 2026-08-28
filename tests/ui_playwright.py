@@ -137,6 +137,8 @@ async def main():
         await pg.reload(); await pg.wait_for_selector('.node'); await pg.click('#tabs button[data-view=today]'); await pg.wait_for_timeout(500)
         check('Today nests a sub-task under its parent task like All', await pg.locator(f'.node[data-id="{par["id"]}"] > .kids > .node[data-id="{sub["id"]}"]').count() == 1)
         check('sections with nothing due are left out', await pg.locator('#view .node.heading > .row > .text', has_text='Career').count() == 0)
+        kid2 = by_text(tree(), 'And prep it')  # sibling of the due sub-task, itself undated: comes along with its due parent
+        check('every child of a due parent shows in Today', await pg.locator(f'.node[data-id="{kid2["id"]}"]').count() == 1)
         await pg.screenshot(path=f'{SP}/ui-today.png')
         await pg.click('#tabs button[data-view=done]'); await pg.wait_for_timeout(600)
         check('Done view shows the done item in its outline', await pg.locator('#view .node.done > .row > .text', has_text=' item via Enter').count() == 1 and await pg.locator('#view .node.done > .row > .when').count() >= 1)
@@ -457,16 +459,24 @@ async def main():
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(700)
         t4 = tree(); check('one Ctrl+Z reverts the whole batch', t4[pa['id']]['priority'] == 'urgent' and t4[pb['id']]['priority'] == 'urgent')
         await pg.keyboard.press('Escape')
-        # --- sort by urgency
+        # --- auto-sort
         sec = by_text(tree(), 'Racer - Conf 2026')
-        before_order = [n['id'] for n in sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])]
+        order_of = lambda: [n['id'] for n in sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])]
+        rank = lambda x: (1 if x['done_at'] else 0, {'urgent': 0, 'soon': 1, 'normal': 2, 'later': 3, 'none': 5}[x['priority']] if not (x['color'] and x['priority'] == 'none') else 4)
+        before_order = order_of()
         await pg.click('#sort-btn'); await pg.wait_for_timeout(900)
-        kids = sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])
-        ranks = [(1 if x['done_at'] else 0, {'urgent': 0, 'soon': 1, 'normal': 2, 'later': 3, 'none': 5}[x['priority']] if not (x['color'] and x['priority'] == 'none') else 4) for x in kids if x['kind'] == 'task']
-        check('Sort orders a section by urgency', ranks == sorted(ranks) and len(ranks) > 3, ranks)
+        kids = [tree()[i] for i in order_of()]; ranks = [rank(x) for x in kids if x['kind'] == 'task']
+        check('switching Auto-sort on orders the section by urgency', ranks == sorted(ranks) and len(ranks) > 3 and 'on' in (await pg.locator('#sort-btn').get_attribute('class') or ''), ranks)
+        low = [x for x in kids if x['kind'] == 'task' and x['priority'] != 'urgent' and not x['done_at']][-1]  # the last open non-urgent task: making it urgent must move it up
+        await pg.locator(f'.node[data-id="{low["id"]}"] > .row > .text').click(); await pg.keyboard.press('Control+Shift+Digit1'); await pg.wait_for_timeout(1000)
+        kids2 = [tree()[i] for i in order_of()]
+        check('making a task urgent moves it up on its own', tree()[low['id']]['priority'] == 'urgent' and [x['id'] for x in kids2 if x['kind'] == 'task'].index(low['id']) < [x['id'] for x in kids if x['kind'] == 'task'].index(low['id']))
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(1000)
+        check('one Ctrl+Z undoes the priority and the re-sort together', tree()[low['id']]['priority'] == low['priority'] and [x['id'] for x in [tree()[i] for i in order_of()]] == [x['id'] for x in kids])
+        await pg.click('#sort-btn'); await pg.wait_for_timeout(300)
+        check('Auto-sort switches off', 'on' not in (await pg.locator('#sort-btn').get_attribute('class') or ''))
         await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(900)
-        after_undo = [n['id'] for n in sorted((x for x in tree().values() if x['parent_id'] == sec['id']), key=lambda x: x['position'])]
-        check('one Ctrl+Z restores the previous order everywhere', after_undo == before_order)
+        check('and the first sort can be undone too', order_of() == before_order)
         # --- mobile viewport sanity
         await pg.set_viewport_size({'width': 390, 'height': 800}); await pg.wait_for_timeout(300)
         check('no horizontal scroll on phone width', await pg.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1'))

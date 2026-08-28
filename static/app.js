@@ -80,6 +80,7 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
+  autoSort: localStorage.getItem('autoSort') === '1',  // keep every section in urgency order as things change
   filter: new Set(JSON.parse(localStorage.getItem('filter') || '[]')),  // priorities to show; empty = everything
   scroll: {},  // scroll position remembered per tab
   todayMode: 'due',  // Today tab: 'due' (default) or 'rest' — everything open that is not due
@@ -218,7 +219,8 @@ function render() {
 }
 function tabCounts() {
   const t = todayISO(); let today = 0, waiting = 0;
-  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if (n.due_date && n.due_date <= t) today++; if (n.waiting_on) waiting++; }
+  const dueBy = n => { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (c.due_date && c.due_date <= t) return true; } return false; };
+  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if (dueBy(n)) today++; if (n.waiting_on) waiting++; }
   for (const b of $$('#tabs button')) {
     const c = { today, waiting }[b.dataset.view]; let badge = $('b', b);
     if (!c) { badge?.remove(); continue; }
@@ -512,14 +514,16 @@ async function applyEntry(e, dir) {
 async function runUndo(dir) {
   flushAll();
   const from = dir === 'undo' ? undoState.stack : undoState.redo, to = dir === 'undo' ? undoState.redo : undoState.stack;
-  const e = from.pop();
+  let e = from.pop();
   if (!e) return toast(dir === 'undo' ? 'Nothing to undo' : 'Nothing to redo');
+  const batch = [e];
+  if (dir === 'undo') { while (e.auto && from.length) { e = from.pop(); batch.push(e); } }  // the auto-sort, then the change that caused it
+  else { while (from.at(-1)?.auto) batch.push(from.pop()); }                                  // the change, then its auto-sort
   let focus = null;
-  try { focus = await queue.run(() => applyEntry(e, dir)); } catch (err) { showError(err); return; }
-  to.push(e);
+  try { for (const b of batch) { const f = await queue.run(() => applyEntry(b, dir)); if (!b.auto) focus = f; to.push(b); } } catch (err) { showError(err); return; }
   if (S.view !== 'all') focus = null;
   await refresh(focus);
-  toast(`${dir === 'undo' ? 'Undid' : 'Redid'}: ${e.label || e.type}`);
+  toast(`${dir === 'undo' ? 'Undid' : 'Redid'}: ${e.label || e.type}`);  // e is the user's change (the last of the batch when undoing)
 }
 
 // ---------------------------------------------------------------- operations
@@ -549,18 +553,19 @@ function toggleDone(n) {
     if (changed.length > 1) {
       if (S.view !== 'all' || S.hideDone) return refresh(keepFocus());
       for (const id of changed) { const c = S.nodes.get(id); if (c && c.id !== n.id) { c.done_at = done ? n.done_at : null; patchNodeDom(c); } }
-      tabCounts(); return;
+      tabCounts(); return autoSort();
     }
     if (S.hideDone || S.view !== 'all') render();
+    autoSort();
   }).catch(showError);
 }
 // A change made on one row of a selection is made on every selected task, as one undo step.
 const withSelection = n => S.sel.size > 1 && S.sel.has(n.id) ? [...S.sel].map(getNode).filter(x => x && x.kind === 'task') : [n];
 function patchMany(nodes, fields, label) {
-  if (nodes.length === 1) { patchFields(nodes[0], fields, label).catch(showError); patchNodeDom(nodes[0]); return; }
+  if (nodes.length === 1) { const p = patchFields(nodes[0], fields, label).catch(showError); patchNodeDom(nodes[0]); return p.then(autoSort); }
   const items = nodes.map(x => { const old = {}; for (const k of Object.keys(fields)) old[k] = x[k]; Object.assign(x, fields); patchNodeDom(x); return { id: x.id, old, new: { ...fields } }; });
   pushUndo({ type: 'patchMany', items, label: `${label} × ${nodes.length}` });
-  queue.run(async () => { for (const it of items) { const r = await api.patch(it.id, it.new); const x = getNode(it.id); if (x) { for (const k of ['priority', 'color', 'auto_urgent']) if (r[k] !== x[k]) { it.new[k] = r[k]; x[k] = r[k]; } patchNodeDom(x); } } }).catch(showError);
+  return queue.run(async () => { for (const it of items) { const r = await api.patch(it.id, it.new); const x = getNode(it.id); if (x) { for (const k of ['priority', 'color', 'auto_urgent']) if (r[k] !== x[k]) { it.new[k] = r[k]; x[k] = r[k]; } patchNodeDom(x); } } }).then(autoSort).catch(showError);
 }
 function setPriority(n, p) { if (n.kind !== 'task') return; patchMany(withSelection(n), { priority: p, color: null }, 'priority'); }
 function setColor(n, hex) { patchMany(withSelection(n), { color: hex }, 'color'); }
@@ -608,7 +613,7 @@ function toggleDoneMany(nodes) {
   return structural(async () => { for (const n of targets) changed.push(...(await api.done(n.id, done)).changed); }, () => {
     pushUndo({ type: 'done', id: targets[0].id, done, changed: [...new Set(changed)], label: `${done ? 'done' : 'not done'} × ${targets.length}` });
     return null;
-  });
+  }).then(autoSort);
 }
 function moveMany(nodes, parent_id, after_id, before) {
   const moves = [];
@@ -626,7 +631,7 @@ function moveMany(nodes, parent_id, after_id, before) {
 // then tasks by priority (custom colour after later, none last), open before done, earlier due date first, ties keep their order.
 const URGENCY = { urgent: 0, soon: 1, normal: 2, later: 3, none: 5 };
 const urgencyKey = n => [n.done_at ? 1 : 0, n.color && n.priority === 'none' ? 4 : URGENCY[n.priority] ?? 5, n.due_date || '9999'];
-function sortByUrgency(rootId = null) {
+function sortByUrgency(rootId = null, opts = {}) {
   const changes = [];
   (function walk(pid) {
     const kids = kidsOf(pid);
@@ -638,12 +643,19 @@ function sortByUrgency(rootId = null) {
     }
     for (const k of kids) walk(k.id);
   })(rootId);
-  if (!changes.length) return toast('Already in order');
+  if (!changes.length) { if (!opts.auto) toast('Already in order'); return; }
+  const keep = keepFocus();
   return structural(async () => { for (const c of changes) await api.reorder(c.parent_id, c.after); }, () => {
-    pushUndo({ type: 'reorder', changes, label: 'sort by urgency' });
-    toast(`Sorted ${changes.length === 1 ? 'the section' : changes.length + ' sections'} by urgency — Ctrl+Z to undo`);
-    return null;
+    pushUndo({ type: 'reorder', changes, label: opts.auto ? 'auto-sort' : 'sort by urgency', auto: !!opts.auto });  // auto entries undo together with the change that caused them
+    if (!opts.auto) toast(`Sorted ${changes.length === 1 ? 'the section' : changes.length + ' sections'} by urgency — Ctrl+Z to undo`);
+    return keep;
   });
+}
+const autoSort = () => { if (S.autoSort && S.view === 'all') sortByUrgency(null, { auto: true }); };
+function setAutoSort(on) {
+  S.autoSort = on; localStorage.setItem('autoSort', on ? '1' : '0');
+  const b = $('#sort-btn'); b.classList.toggle('on', on); b.textContent = on ? 'Auto-sort · on' : 'Auto-sort';
+  if (on) { toast('Auto-sort on: sections stay in urgency order'); sortByUrgency(null, {}); } else toast('Auto-sort off');
 }
 function moveNode(n, parent_id, after_id, caret, before) {
   const from = placeOf(n);
@@ -1048,7 +1060,8 @@ function renderToday(main) {
   main.innerHTML = '';
   const t = todayISO(), q = S.query.trim().toLowerCase();
   const open = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at && passesFilter(n));
-  const due = open.filter(n => n.due_date && n.due_date <= t), dueSet = new Set(due);  // by date only: overdue or due today
+  const dueBy = n => { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (c.due_date && c.due_date <= t) return true; } return false; };  // its own date, or a parent task's
+  const due = open.filter(dueBy), dueSet = new Set(due);  // by date only: overdue or due today
   const rest = open.filter(n => !dueSet.has(n));
   const sw = document.createElement('div'); sw.className = 'view-switch';
   for (const [key, label, list] of [['due', 'Due today', due], ['rest', 'Everything else', rest]]) {
@@ -1208,7 +1221,8 @@ function boot() {
   $('#archive-done').onclick = archiveAllDone;
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
   $('#filter-btn').onclick = e => openPopover(e.target, filterPicker());
-  $('#sort-btn').onclick = () => sortByUrgency(null);
+  $('#sort-btn').onclick = () => setAutoSort(!S.autoSort);
+  if (S.autoSort) { $('#sort-btn').classList.add('on'); $('#sort-btn').textContent = 'Auto-sort · on'; }
   $('#filter-btn').classList.toggle('on', S.filter.size > 0); if (S.filter.size) $('#filter-btn').textContent = `Filter · ${S.filter.size}`;
   applyTheme(localStorage.getItem('theme'), false);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(localStorage.getItem('theme'), false));
