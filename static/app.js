@@ -727,7 +727,7 @@ function onKey(e) {
   setCurrent(n.id);
   const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
   const caret = () => caretOffset(t);
-  if (e.key === 'Escape') { closePopover(); t.blur(); setSelection([n.id], n.id); return; }  // leave the words, keep the row picked
+  if (e.key === 'Escape') { closePopover(); t.blur(); return; }
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (itemShortcut(e, n, caret)) return;
@@ -1165,9 +1165,8 @@ function boot() {
       else { const next = new Set(S.sel); if (!next.size && S.current != null && S.current !== id) next.add(S.current); next.has(id) ? next.delete(id) : next.add(id); setSelection(next, S.selAnchor ?? S.current ?? id); }
       setCurrent(id); return;
     }
-    if (e.target.closest('.text, .note-text, a.link')) { clearSelection(); setCurrent(id); return; }  // editing: caret, no selection
     if (S.sel.has(id) && e.target.closest('.handle, .dot, .chip, .wait, .menu, .check, .note-preview')) { setCurrent(id); return; }  // acting on the selection
-    setSelection([id], id); setCurrent(id);
+    clearSelection(); setCurrent(id);  // a plain click picks this one row
   });
   view.addEventListener('focusout', e => { if (e.target.classList?.contains('text')) flushText(+e.target.closest('.node').dataset.id); if (e.target.classList?.contains('note-text')) flushNote(+e.target.closest('.node').dataset.id); });
   view.addEventListener('beforeinput', e => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); runUndo(e.inputType === 'historyUndo' ? 'undo' : 'redo'); } });
