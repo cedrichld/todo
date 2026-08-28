@@ -30,6 +30,14 @@ async def main():
         pg.on('console', lambda m: errors.append(f'{m.type}: {m.text}') if m.type in ('error', 'warning') else None)
         pg.on('pageerror', lambda e: (errors.append(f'pageerror: {e}'), logs.append(f'PAGEERROR {e}\n{e.stack}')))
         await pg.goto(URL); await pg.wait_for_selector('.node')
+        check('Auto-sort is on for a fresh profile', 'on' in (await pg.locator('#sort-btn').get_attribute('class') or ''))
+        await pg.evaluate("localStorage.setItem('autoSort', '0')"); await pg.reload(); await pg.wait_for_selector('.node')  # the rest of the suite expects rows to stay put
+        check('the switched-off setting survives a reload', 'on' not in (await pg.locator('#sort-btn').get_attribute('class') or ''))
+        # --- filter popover toggles and is fixed to the viewport
+        await pg.click('#filter-btn'); await pg.wait_for_timeout(200)
+        check('Filter opens its popover', not await pg.locator('#popover').is_hidden() and await pg.evaluate("getComputedStyle(document.querySelector('#popover')).position") == 'fixed')
+        await pg.click('#filter-btn'); await pg.wait_for_timeout(200)
+        check('clicking Filter again closes it', await pg.locator('#popover').is_hidden())
         logs = []; pg.on('console', lambda m: logs.append(f'{m.type}: {m.text}'))
         await pg.evaluate("""() => { for (const k of ['done','move','patch','split','del']) { const o = api[k]; api[k] = (...a) => { console.log('API', k, JSON.stringify(a)); return o(...a).then(r => r, e => { console.log('ERR', k, e.message); throw e; }); }; }
           document.addEventListener('change', e => console.log('CHANGE', e.target.className, e.target.checked, 'node', e.target.closest('.node')?.dataset.id), true);

@@ -622,7 +622,12 @@ class Store:
                 parent_id = n['parent_id']
             if after_id is _UNSET:
                 after_id = node_id
-            new_id = self._create(parent_id, after_id, 'task', tail, 'none', None, None, None, None, 'create')
+            prio = 'none'
+            if parent_id is not None:
+                pn = self.get(parent_id)
+                if pn['kind'] == 'task':
+                    prio = pn['priority']  # a new sub-task starts as urgent as its parent
+            new_id = self._create(parent_id, after_id, 'task', tail, prio, None, None, None, None, 'create')
         return self.get(node_id), self.get(new_id)
 
     def reorder(self, parent_id, ids):

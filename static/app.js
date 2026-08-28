@@ -80,7 +80,7 @@ function setStatus(err) {
 
 // ---------------------------------------------------------------- state
 const S = {
-  autoSort: localStorage.getItem('autoSort') === '1',  // keep every section in urgency order as things change
+  autoSort: localStorage.getItem('autoSort') !== '0',  // on unless switched off  // keep every section in urgency order as things change
   filter: new Set(JSON.parse(localStorage.getItem('filter') || '[]')),  // priorities to show; empty = everything
   scroll: {},  // scroll position remembered per tab
   todayMode: 'due',  // Today tab: 'due' (default) or 'rest' — everything open that is not due
@@ -789,7 +789,7 @@ function onKey(e) {
   setCurrent(n.id);
   const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
   const caret = () => caretOffset(t);
-  if (e.key === 'Escape') { closePopover(); t.blur(); return; }
+  if (e.key === 'Escape') { closePopover(); t.blur(); clearSelection(); setCurrent(null); return; }
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
   if (itemShortcut(e, n, caret)) return;
@@ -812,7 +812,7 @@ function onGlobalKey(e) {
   const typing = (tag === 'INPUT' && ae.type !== 'checkbox') || tag === 'TEXTAREA' || ae?.isContentEditable;  // a focused checkbox is not a place you type
   if (ctrl && e.key.toLowerCase() === 'k') { e.preventDefault(); const s = $('#search'); s.focus(); s.select(); return; }
   if (e.altKey && e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); const vs = VIEWS.filter(v => v !== 'history' || S.view === 'history'), i = vs.indexOf(S.view); return setView(vs[(i + (e.key === 'ArrowRight' ? 1 : vs.length - 1)) % vs.length]); }
-  if (e.key === 'Escape') { closePopover(); clearSelection(); return; }
+  if (e.key === 'Escape') { closePopover(); clearSelection(); setCurrent(null); return; }
   if (typing && ae !== document.body) return;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
   if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); return runUndo('redo'); }
@@ -833,17 +833,17 @@ function onGlobalKey(e) {
 }
 
 // ---------------------------------------------------------------- popovers
-function openPopover(anchor, content) {
+function openPopover(anchor, content, { fixed = false, kind = '' } = {}) {
   const pop = $('#popover');
-  pop.innerHTML = ''; pop.appendChild(content); pop.hidden = false;
-  const r = anchor.getBoundingClientRect();
-  let left = r.left + window.scrollX, top = r.bottom + window.scrollY + 4;
+  pop.innerHTML = ''; pop.appendChild(content); pop.hidden = false; pop.classList.toggle('fixed', fixed);  // fixed: anchored to the sticky bar, stays put while the page scrolls
+  const r = anchor.getBoundingClientRect(), sx = fixed ? 0 : window.scrollX, sy = fixed ? 0 : window.scrollY;
+  let left = r.left + sx, top = r.bottom + sy + 4;
   pop.style.left = '0px'; pop.style.top = '0px';
-  const w = pop.offsetWidth; if (left + w > window.scrollX + window.innerWidth - 8) left = Math.max(8, window.scrollX + window.innerWidth - w - 8);
+  const w = pop.offsetWidth; if (left + w > sx + window.innerWidth - 8) left = Math.max(8, sx + window.innerWidth - w - 8);
   pop.style.left = left + 'px'; pop.style.top = top + 'px';
-  pop.dataset.for = anchor.closest('.node')?.dataset.id || '';
+  pop.dataset.for = anchor.closest('.node')?.dataset.id || ''; pop.dataset.kind = kind;
 }
-function closePopover() { const pop = $('#popover'); pop.hidden = true; pop.innerHTML = ''; }
+function closePopover() { const pop = $('#popover'); pop.hidden = true; pop.innerHTML = ''; pop.dataset.kind = ''; }
 function priorityPicker(n) {
   const box = document.createElement('div'); box.className = 'picker';
   for (const p of ['urgent', 'soon', 'normal', 'later']) {
@@ -1243,7 +1243,7 @@ function boot() {
   hide.onchange = () => { S.hideDone = hide.checked; localStorage.setItem('hideDone', hide.checked ? '1' : '0'); render(); };
   $('#archive-done').onclick = archiveAllDone;
   $('#help-btn').onclick = e => openPopover(e.target, helpPanel());
-  $('#filter-btn').onclick = e => openPopover(e.target, filterPicker());
+  $('#filter-btn').onclick = e => { const pop = $('#popover'); if (!pop.hidden && pop.dataset.kind === 'filter') return closePopover(); openPopover(e.currentTarget, filterPicker(), { fixed: true, kind: 'filter' }); };
   $('#sort-btn').onclick = e => { const b = e.currentTarget, r = b.getBoundingClientRect(); b.style.setProperty('--x', `${(e.clientX - r.left) / r.width * 100}%`); b.style.setProperty('--y', `${(e.clientY - r.top) / r.height * 100}%`); setAutoSort(!S.autoSort); };
   if (S.autoSort) { $('#sort-btn').classList.add('on'); $('#sort-btn').title = 'Auto-sort is on — sections stay in urgency order (click to switch off)'; }
   $('#filter-btn').classList.toggle('on', S.filter.size > 0); if (S.filter.size) $('#filter-btn').textContent = `Filter · ${S.filter.size}`;

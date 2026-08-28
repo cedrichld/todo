@@ -272,6 +272,15 @@ class DoneFlow(StoreTestCase):
         self.s.delete(e['id'])  # hard delete of an empty row does the same
         self.assertTrue(self.done(self.p))
 
+    def test_split_inherits_the_parents_priority(self):
+        self.s.update(self.p['id'], priority='urgent')
+        _, tail = self.s.split(self.x['id'], 1)  # Enter inside a child: sibling under p
+        self.assertEqual(tail['priority'], 'urgent')
+        _, kid = self.s.split(self.p['id'], 6, parent_id=self.p['id'], after_id=None)  # Enter on p: first child
+        self.assertEqual(kid['priority'], 'urgent')
+        _, top = self.s.split(self.p['id'], 6)  # sibling under the heading: nothing to inherit
+        self.assertEqual(top['priority'], 'none')
+
     def test_set_done_many_is_exact(self):
         self.s.set_done(self.x['id'], True)
         self.assertEqual(self.s.set_done_many([self.p['id'], self.y['id']], True), [self.p['id'], self.y['id']])

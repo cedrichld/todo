@@ -241,6 +241,7 @@ a.link:hover { text-decoration-color: var(--accent); background: color-mix(in sr
 /* popover */
 #popover { position: absolute; z-index: 10; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-l); box-shadow: var(--shadow); padding: .55rem; font-size: .92rem; min-width: 9rem; animation: pop .16s var(--ease); transform-origin: top left; }
 #popover[hidden] { display: none; }
+#popover.fixed { position: fixed; }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.985); } }
 .picker, .menu-list { display: flex; flex-direction: column; gap: .1rem; }
 .swatch, .menu-list button { display: flex; align-items: center; gap: .5rem; background: none; border: none; font-size: .95rem; padding: .28rem .55rem; border-radius: var(--r-s); text-align: left; transition: background-color .12s; }
