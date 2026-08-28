@@ -263,6 +263,15 @@ class DoneFlow(StoreTestCase):
         self.assertFalse(self.done(self.p)); self.assertFalse(self.done(tail))
         self.assertTrue(self.done(self.y))
 
+    def test_removing_the_last_open_sub_task_completes_the_parent(self):
+        self.s.set_done(self.x['id'], True)
+        self.s.delete(self.y['id'])  # archived: x is the only live sub-task and it is done
+        self.assertTrue(self.done(self.p))
+        e = self.s.create(parent_id=self.p['id'], text='')  # a new open row reopens p; x stays done
+        self.assertFalse(self.done(self.p)); self.assertTrue(self.done(self.x))
+        self.s.delete(e['id'])  # hard delete of an empty row does the same
+        self.assertTrue(self.done(self.p))
+
     def test_set_done_many_is_exact(self):
         self.s.set_done(self.x['id'], True)
         self.assertEqual(self.s.set_done_many([self.p['id'], self.y['id']], True), [self.p['id'], self.y['id']])

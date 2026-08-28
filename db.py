@@ -671,10 +671,24 @@ class Store:
                 self._renumber(sibs[:idx] + kids + sibs[idx + 1:])
                 self.conn.execute('DELETE FROM history WHERE node_id=?', (node_id,))
                 self.conn.execute('DELETE FROM nodes WHERE id=?', (node_id,))
+                self._settle_ancestors(n['parent_id'], now_iso())
                 return {'id': node_id, 'hard': True}
             self._archive(node_id, now_iso())
             self._renumber(self._siblings(n['parent_id']))
+            self._settle_ancestors(n['parent_id'], now_iso())
             return {'id': node_id, 'hard': False}
+
+    def _settle_ancestors(self, parent_id, ts):
+        """After a sub-task leaves: a task whose remaining live sub-tasks are all done becomes done."""
+        p = parent_id
+        while p is not None:
+            pn = self.get(p)
+            if pn['kind'] != 'task':
+                break
+            subs = [k for k in self._live_kids(p) if k['kind'] == 'task']
+            if subs and all(k['done_at'] for k in subs) and not pn['done_at']:
+                self._flip_done(p, True, ts, [])
+            p = pn['parent_id']
 
     def restore(self, node_id, parent_id=_UNSET, after_id=_UNSET):
         """Bring an archived node (and everything archived with it) back; default place = end of its old parent."""
