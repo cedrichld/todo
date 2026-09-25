@@ -86,6 +86,8 @@ const S = {
   todayMode: 'due',  // Today tab: 'due' (default) or 'rest' — everything open that is not due
   sel: new Set(), selAnchor: null,  // multi-selection of rows (ids) and the end it grows from
   noteOpen: new Set(),  // ids whose note editor is expanded (session-only, survives re-renders)
+  pinned: new Set(),  // rows made in this tab stay on screen until you leave it, even if its filter would hide them
+  fresh: new Map(),  // ids made with Enter → { dated }: their colour (and a Today date) came from where they were made, not from you
   nodes: new Map(), kids: new Map(), drag: null, query: '', current: null,
   view: localStorage.getItem('view') || 'all',
   hideDone: localStorage.getItem('hideDone') === '1',
@@ -488,7 +490,7 @@ async function applyEntry(e, dir) {
       return { id, caret: 'end' };
     }
     case 'done': await api.doneBatch((e.changed || [e.id]).map(rid), dir === 'undo' ? !e.done : e.done); return { id, caret: 'end' };
-    case 'move': { const to = dir === 'undo' ? e.from : e.to; await api.move(id, rid(to.parent_id), rid(to.after_id)); return { id, caret: 'end' }; }
+    case 'move': { const to = dir === 'undo' ? e.from : e.to; await api.move(id, rid(to.parent_id), rid(to.after_id)); if (e.new) await api.patch(id, dir === 'undo' ? e.old : e.new); return { id, caret: 'end' }; }
     case 'create':
       if (dir === 'undo') { await api.del(id, true); return e.parent_id != null ? { id: rid(e.parent_id), caret: 'end' } : null; }
       { const r = await api.create({ parent_id: rid(e.parent_id), after_id: rid(e.after_id), kind: e.kind, text: e.text }); remap(e.id, r.id); return { id: r.id, caret: 'end' }; }
@@ -497,7 +499,7 @@ async function applyEntry(e, dir) {
       await api.del(id, true); return null;
     case 'split':
       if (dir === 'undo') { await api.del(rid(e.tail), true); await api.patch(id, { text: e.full }); return { id, caret: e.at }; }
-      { const r = await api.split(id, e.at, e.full, rid(e.parent_id), rid(e.after_id)); remap(e.tail, r.nodes[1].id); return { id: r.nodes[1].id, caret: 0 }; }
+      { const r = await api.split(id, e.at, e.full, rid(e.parent_id), rid(e.after_id)), t = r.nodes[1].id; remap(e.tail, t); S.pinned.add(t); if (e.due) await api.patch(t, { due_date: e.due }); return { id: t, caret: 0 }; }
     case 'archive':
       if (dir === 'undo') { await restoreAt(id, e.parent_id, e.after_id); return { id, caret: 'end' }; }
       await api.del(id); return null;
@@ -575,9 +577,9 @@ function patchMany(nodes, fields, label) {
   pushUndo({ type: 'patchMany', items, label: `${label} × ${nodes.length}` });
   return queue.run(async () => { for (const it of items) { const r = await api.patch(it.id, it.new); const x = getNode(it.id); if (x) { for (const k of ['priority', 'color', 'auto_urgent']) if (r[k] !== x[k]) { it.new[k] = r[k]; x[k] = r[k]; } patchNodeDom(x); } } }).then(autoSort).catch(showError);
 }
-function setPriority(n, p) { if (n.kind !== 'task') return; patchMany(withSelection(n), { priority: p, color: null }, 'priority'); }
-function setColor(n, hex) { patchMany(withSelection(n), { color: hex }, 'color'); }
-function setDue(n, date, slot) { patchMany(withSelection(n), { due_date: date, due_slot: date ? slot : null }, 'due date'); }
+function setPriority(n, p) { if (n.kind !== 'task') return; const ns = withSelection(n); for (const x of ns) S.fresh.delete(x.id); patchMany(ns, { priority: p, color: null }, 'priority'); }
+function setColor(n, hex) { const ns = withSelection(n); for (const x of ns) S.fresh.delete(x.id); patchMany(ns, { color: hex }, 'color'); }
+function setDue(n, date, slot) { const ns = withSelection(n); for (const x of ns) if (S.fresh.has(x.id)) S.fresh.get(x.id).dated = false; patchMany(ns, { due_date: date, due_slot: date ? slot : null }, 'due date'); }
 function toggleFold(n) {
   n.collapsed = n.collapsed ? 0 : 1; render();
   queue.run(() => api.patch(n.id, { collapsed: !!n.collapsed })).catch(showError);
@@ -593,12 +595,17 @@ function enterAt(n, t) {
   if (n.kind === 'heading' || (kidsOf(n.id).length && !n.collapsed)) { parent_id = n.id; after_id = null; }
   if (textTimers.has(n.id)) { clearTimeout(textTimers.get(n.id)); textTimers.delete(n.id); }
   if (text !== n._saved) { pushTextUndo(n.id, n._saved, text); n._saved = text; }  // the split carries the text
-  return structural(() => api.split(n.id, at, text, parent_id, after_id), r => {
-    pushUndo({ type: 'split', id: n.id, tail: r.nodes[1].id, at, full: text, parent_id, after_id, label: 'new item' });
-    return { id: r.nodes[1].id, caret: 0 };
+  // typed into Today's due list, a new task is due today, unless a task it sits under already is
+  const due = S.view === 'today' && S.todayMode === 'due' && !dueBy(getNode(parent_id)) ? todayISO() : null;
+  return structural(async () => { const r = await api.split(n.id, at, text, parent_id, after_id); if (due) await api.patch(r.nodes[1].id, { due_date: due }); return r; }, r => {
+    const id = r.nodes[1].id;
+    pushUndo({ type: 'split', id: n.id, tail: id, at, full: text, parent_id, after_id, due, label: 'new item' });
+    S.pinned.add(id); S.fresh.set(id, { dated: !!due });
+    return { id, caret: 0 };
   });
 }
 function deleteNode(n) {
+  S.pinned.delete(n.id); S.fresh.delete(n.id);  // sqlite may hand the id to the next new row
   const prev = neighborId(n.id, -1), place = placeOf(n), snap = { kind: n.kind, text: n.text };
   return structural(() => api.del(n.id), r => {
     if (r.hard) pushUndo({ type: 'hardDelete', id: n.id, ...place, ...snap, label: 'delete' });
@@ -680,18 +687,27 @@ function setAutoSort(on) {
   const b = $('#sort-btn'); b.classList.toggle('on', on); b.title = on ? 'Auto-sort is on — sections stay in urgency order (click to switch off)' : 'Keep every section sorted by urgency';
   if (on) { toast('Auto-sort on: sections stay in urgency order'); sortByUrgency(null, {}); } else toast('Auto-sort off');
 }
-function moveNode(n, parent_id, after_id, caret, before) {
+function moveNode(n, parent_id, after_id, caret, before, patch) {  // patch: fields set along with the move, undone with it
   const from = placeOf(n);
   if (from.parent_id === parent_id && from.after_id === after_id) return;
-  return structural(async () => { if (before) await before(); return api.move(n.id, parent_id, after_id); }, () => {
-    pushUndo({ type: 'move', id: n.id, from, to: { parent_id, after_id }, label: 'move' });
+  if (patch && !Object.keys(patch).length) patch = null;
+  const old = patch && Object.fromEntries(Object.keys(patch).map(k => [k, n[k]]));
+  return structural(async () => { if (before) await before(); const r = await api.move(n.id, parent_id, after_id); if (patch) await api.patch(n.id, patch); return r; }, () => {
+    pushUndo({ type: 'move', id: n.id, from, to: { parent_id, after_id }, old, new: patch, label: 'move' });
     return { id: n.id, caret: caret ?? 'end' };
   });
 }
 function indent(n, caret) {
-  const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n); if (i <= 0) return toast('Nothing above to nest under');
-  const prev = sibs[i - 1], last = kidsOf(prev.id).at(-1);
-  return moveNode(n, prev.id, last ? last.id : null, caret, prev.collapsed ? () => api.patch(prev.id, { collapsed: false }) : null);
+  const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n);
+  const shown = sibs.slice(0, Math.max(i, 0)).findLast(s => $(`#view .node[data-id="${s.id}"]`));  // the row above on screen, past any this tab hides
+  const prev = shown || (S.view === 'all' && i > 0 ? sibs[i - 1] : null); if (!prev) return toast('Nothing above to nest under');
+  const last = kidsOf(prev.id).at(-1), patch = {}, f = S.fresh.get(n.id);
+  if (n.kind === 'task' && prev.kind === 'task') {
+    // a task with no colour of its own, or one just made with Enter, takes the colour of the task it now sits under
+    if ((f || (n.priority === 'none' && !n.color)) && (n.priority !== prev.priority || n.color !== prev.color)) Object.assign(patch, { priority: prev.priority, color: prev.color });
+    if (f?.dated && dueBy(prev)) { Object.assign(patch, { due_date: null, due_slot: null }); f.dated = false; }  // the parent's date already puts it on Today
+  }
+  return moveNode(n, prev.id, last ? last.id : null, caret, prev.collapsed ? () => api.patch(prev.id, { collapsed: false }) : null, patch);
 }
 function outdent(n, caret) {
   const p = S.nodes.get(n.parent_id); if (!p) return toast('Already at the top level');
@@ -787,7 +803,7 @@ function onKey(e) {
   if (!t.classList?.contains('text')) return;
   const n = nodeOf(t); if (!n) return;
   setCurrent(n.id);
-  const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all';
+  const ctrl = e.ctrlKey || e.metaKey, outline = S.view === 'all', live = LIVE_VIEWS.has(S.view);
   const caret = () => caretOffset(t);
   if (e.key === 'Escape') { closePopover(); t.blur(); clearSelection(); setCurrent(null); return; }
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); return runUndo(e.shiftKey ? 'redo' : 'undo'); }
@@ -796,12 +812,12 @@ function onKey(e) {
   if (e.shiftKey && !ctrl && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && (e.key === 'ArrowUp' ? caretEdge(t).first : caretEdge(t).last)) {
     e.preventDefault(); t.blur(); setSelection([n.id], n.id); return extendSelection(e.key === 'ArrowUp' ? -1 : 1);  // start selecting rows
   }
-  if (!outline) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
+  if (!live) { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); return enterAt(n, t); }
   if (e.key === 'Backspace' && ctrl && e.shiftKey) { e.preventDefault(); return deleteNode(n); }
   if (e.key === 'Backspace' && t.textContent.replaceAll(ZW, '') === '') { e.preventDefault(); return deleteNode(n); }
   if (e.key === 'Tab') { e.preventDefault(); return e.shiftKey ? outdent(n, caret()) : indent(n, caret()); }
-  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, caret()); }
+  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); if (outline) moveVert(n, e.key === 'ArrowUp' ? -1 : 1, caret()); return; }  // hidden siblings make swaps invisible outside All
   if (e.key === 'ArrowUp' && !e.shiftKey && caretEdge(t).first) { const id = neighborId(n.id, -1); if (id != null) { e.preventDefault(); focusNode(id, 'end'); } return; }
   if (e.key === 'ArrowDown' && !e.shiftKey && caretEdge(t).last) { const id = neighborId(n.id, 1); if (id != null) { e.preventDefault(); focusNode(id, 0); } return; }
 }
@@ -825,9 +841,9 @@ function onGlobalKey(e) {
   if (!ctrl && !e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); clearSelection(); const id = neighborId(n.id, e.key === 'ArrowUp' ? -1 : 1); if (id != null) focusNode(id, 'end'); return; }
   if (S.sel.size && !ctrl && !e.altKey && e.key === 'Enter') { e.preventDefault(); return toggleDoneMany(selectedNodes()); }
   if (itemShortcut(e, n)) return;
-  if (S.view !== 'all') return;
+  if (!LIVE_VIEWS.has(S.view)) return;
   if (e.key === 'Tab' && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return e.shiftKey ? outdent(n, 'end') : indent(n, 'end'); }
-  if (e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); return moveVert(n, e.key === 'ArrowUp' ? -1 : 1, 'end'); }
+  if (e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); if (S.view === 'all') moveVert(n, e.key === 'ArrowUp' ? -1 : 1, 'end'); return; }
   if (!ctrl && !e.altKey && e.key === 'Enter') { e.preventDefault(); return toggleDone(n); }  // a selected row, not being typed in
   if ((e.key === 'Delete' || e.key === 'Backspace') && !ctrl && !e.altKey) { e.preventDefault(); closePopover(); return S.sel.size ? deleteMany(selectedNodes()) : deleteNode(n); }
 }
@@ -862,26 +878,31 @@ function priorityPicker(n) {
   return box;
 }
 function duePicker(n) {
-  const box = document.createElement('div'); box.className = 'due';
-  const start = n.due_date ? parseISO(n.due_date) : new Date();
-  const ym = { y: start.getFullYear(), m: start.getMonth() };
+  const box = document.createElement('div'); box.className = 'due'; box.tabIndex = -1;
+  const back = document.activeElement;  // where the keys go back to once a date is picked
+  const cur = n.due_date ? parseISO(n.due_date) : new Date(); cur.setHours(12, 0, 0, 0);  // the keyboard cursor: starts on the due date, else today
+  const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const ym = { y: cur.getFullYear(), m: cur.getMonth() };
+  const done = () => { closePopover(); if (back?.classList?.contains('text') && back.isConnected) focusNode(n.id, 'end'); else if (back?.isConnected) back.focus(); };
+  const pick = iso => { cur.setTime(parseISO(iso).getTime()); cur.setHours(12); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); setDue(n, iso, n.due_slot); draw(); };
+  const shiftMonth = k => { const day = cur.getDate(); cur.setDate(1); cur.setMonth(cur.getMonth() + k); cur.setDate(Math.min(day, new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate())); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); draw(); };
   const draw = () => {
     box.innerHTML = '';
     const head = document.createElement('div'); head.className = 'cal-head';
-    head.innerHTML = `<button class="prev" title="Previous month">‹</button><span>${MON[ym.m]} ${ym.y}</span><button class="next" title="Next month">›</button>`;
-    $('.prev', head).onclick = () => { if (--ym.m < 0) { ym.m = 11; ym.y--; } draw(); };
-    $('.next', head).onclick = () => { if (++ym.m > 11) { ym.m = 0; ym.y++; } draw(); };
+    head.innerHTML = `<button class="prev" title="Previous month (PageUp)">‹</button><span>${MON[ym.m]} ${ym.y}</span><button class="next" title="Next month (PageDown)">›</button>`;
+    $('.prev', head).onclick = () => shiftMonth(-1);
+    $('.next', head).onclick = () => shiftMonth(1);
     box.appendChild(head);
     const grid = document.createElement('div'); grid.className = 'cal-grid';
     for (const d of ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']) { const s = document.createElement('span'); s.className = 'dow'; s.textContent = d; grid.appendChild(s); }
-    const pad = (new Date(ym.y, ym.m, 1).getDay() + 6) % 7;
-    for (let i = 0; i < pad; i++) grid.appendChild(document.createElement('span'));
-    const days = new Date(ym.y, ym.m + 1, 0).getDate();
-    for (let d = 1; d <= days; d++) {
-      const iso = `${ym.y}-${pad2(ym.m + 1)}-${pad2(d)}`;
-      const b = document.createElement('button'); b.textContent = d;
-      b.className = 'day' + (iso === todayISO() ? ' today' : '') + (iso === n.due_date ? ' sel' : '');
-      b.onclick = () => { setDue(n, iso, n.due_slot); draw(); };
+    // whole weeks: the ends of the months either side fill the first and last rows, faded but pickable
+    const first = new Date(ym.y, ym.m, 1, 12), lead = (first.getDay() + 6) % 7, days = new Date(ym.y, ym.m + 1, 0).getDate();
+    const cells = Math.ceil((lead + days) / 7) * 7, today = todayISO(), at = isoOf(cur);
+    for (let i = 0; i < cells; i++) {
+      const d = new Date(ym.y, ym.m, 1 - lead + i, 12), iso = isoOf(d);
+      const b = document.createElement('button'); b.textContent = d.getDate(); b.tabIndex = -1; b.dataset.iso = iso;
+      b.className = 'day' + (d.getMonth() !== ym.m ? ' out' : '') + (iso === today ? ' today' : '') + (iso === n.due_date ? ' sel' : '') + (iso === at ? ' cursor' : '');
+      b.onclick = () => pick(iso);
       grid.appendChild(b);
     }
     box.appendChild(grid);
@@ -889,15 +910,27 @@ function duePicker(n) {
     for (const s of ['morning', 'afternoon', 'evening']) {
       const b = document.createElement('button'); b.textContent = s[0].toUpperCase() + s.slice(1);
       b.className = n.due_slot === s ? 'sel' : '';
-      b.onclick = () => { setDue(n, n.due_date || todayISO(), n.due_slot === s ? null : s); draw(); };
+      b.onclick = () => { setDue(n, n.due_date || today, n.due_slot === s ? null : s); draw(); };
       slots.appendChild(b);
     }
     const clear = document.createElement('button'); clear.className = 'clear'; clear.textContent = 'Clear';
-    clear.onclick = () => { setDue(n, null, null); closePopover(); };
+    clear.onclick = () => { setDue(n, null, null); done(); };
     slots.appendChild(clear);
     box.appendChild(slots);
+    if (box.isConnected && !box.contains(document.activeElement)) box.focus({ preventScroll: true });  // a click redrew the button it landed on
   };
+  // Arrows walk the days (into the next or previous month), PageUp/PageDown flip months, Enter picks, Escape leaves it as it was.
+  box.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+    if (step && !e.ctrlKey && !e.metaKey && !e.altKey) { cur.setDate(cur.getDate() + step); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); draw(); }
+    else if (e.key === 'PageUp' || e.key === 'PageDown') shiftMonth(e.key === 'PageUp' ? -1 : 1);
+    else if (e.key === 'Enter') { if (isoOf(cur) !== n.due_date) setDue(n, isoOf(cur), n.due_slot); done(); }
+    else if (e.key === 'Escape') done();
+    else return;
+    e.preventDefault(); e.stopPropagation();
+  });
   draw();
+  setTimeout(() => box.focus({ preventScroll: true }), 0);
   return box;
 }
 // "Move to section…": every heading, filterable; Enter picks the first match.
@@ -999,7 +1032,7 @@ function helpPanel() {
     ['Ctrl+/', 'Move to another section'], ['Drag the grip', 'Reorder; drop on a section title to move into it'],
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
     ['Ctrl+Shift+1 2 3 4', 'Urgent / Soon / Normal / Later'], ['Ctrl+Shift+0', 'No priority'],
-    ['Ctrl+D', 'Due date'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
+    ['Ctrl+D', 'Due date: arrows pick the day, Enter saves'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
     ['Ctrl+.', 'Notes on the item (emails, links, details); Esc hides them again'],
     ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
     ['Alt+Shift+← / →', 'Previous / next tab'], ['Shift+click · Ctrl+click · Shift+↑↓', 'Select several rows; then Enter (done), Delete, or drag one handle to move them all'],
@@ -1079,29 +1112,31 @@ function renderOutline(main, hits, extra) {
   const hit = new Set(hits);
   for (const el of $$('.node.task', tree)) if (!hit.has(+el.dataset.id)) el.classList.add('ctx');  // a parent shown only for context
 }
+// On Today's due list: overdue or due today by its own date, or a parent task's.
+function dueBy(n, t = todayISO()) { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (c.due_date && c.due_date <= t) return true; } return false; }
+const pinnedIds = () => [...S.pinned].filter(id => { const x = S.nodes.get(id); return x && x.kind === 'task' && !x.done_at; });
 function renderToday(main) {
   main.innerHTML = '';
   const t = todayISO(), q = S.query.trim().toLowerCase();
   const open = [...S.nodes.values()].filter(n => n.kind === 'task' && !n.done_at && passesFilter(n));
-  const dueBy = n => { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (c.due_date && c.due_date <= t) return true; } return false; };  // its own date, or a parent task's
-  const due = open.filter(dueBy), dueSet = new Set(due);  // by date only: overdue or due today
+  const due = open.filter(n => dueBy(n, t)), dueSet = new Set(due);  // by date only: overdue or due today
   const rest = open.filter(n => !dueSet.has(n));
   const sw = document.createElement('div'); sw.className = 'view-switch';
   for (const [key, label, list] of [['due', 'Due today', due], ['rest', 'Everything else', rest]]) {
     const b = document.createElement('button'); b.className = S.todayMode === key ? 'on' : ''; b.innerHTML = '<span></span><b></b>';
     b.firstChild.textContent = label; b.lastChild.textContent = list.length;
-    b.onclick = () => { S.todayMode = key; render(); };
+    b.onclick = () => { S.todayMode = key; S.pinned.clear(); render(); };
     sw.appendChild(b);
   }
   main.appendChild(sw);
-  const hits = (S.todayMode === 'rest' ? rest : due).filter(n => !q || hasQ(n, q)).map(n => n.id);
+  const hits = [...new Set([...(S.todayMode === 'rest' ? rest : due).filter(n => !q || hasQ(n, q)).map(n => n.id), ...pinnedIds()])];
   if (!hits.length) { const p = document.createElement('p'); p.className = 'empty-state'; p.textContent = S.todayMode === 'rest' ? 'Everything open is due today.' : 'Nothing due today.'; main.appendChild(p); return; }
   renderOutline(main, hits);
 }
 function renderWaiting(main) {
   main.innerHTML = '';
   const q = S.query.trim().toLowerCase();
-  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && n.waiting_on && !n.done_at && passesFilter(n) && (!q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))).map(n => n.id);
+  const hits = [...S.nodes.values()].filter(n => n.kind === 'task' && n.waiting_on && !n.done_at && passesFilter(n) && (!q || hasQ(n, q) || n.waiting_on.toLowerCase().includes(q))).map(n => n.id).concat(pinnedIds().filter(id => !S.nodes.get(id).waiting_on));
   if (!hits.length) { main.innerHTML = '<p class="empty-state">Nothing is waiting on anyone. Ctrl+B on a task marks who or what it waits for.</p>'; return; }
   renderOutline(main, hits);
 }
@@ -1176,12 +1211,13 @@ function applyTheme(choice, animate) {
   $('#theme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
   drawRules();
 }
-const VIEWS = ['all', 'today', 'waiting', 'done', 'insights', 'history'];  // history is tucked away: reached from Insights, shown as a tab only while open
+const VIEWS = ['all', 'today', 'waiting', 'done', 'insights', 'history'];
+const LIVE_VIEWS = new Set(['all', 'today', 'waiting']);  // tabs showing live items you can type, nest and add to  // history is tucked away: reached from Insights, shown as a tab only while open
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
 function setView(v) {
   if (v === S.view) return;
   const main = $('#view'), from = VIEWS.indexOf(S.view), to = VIEWS.indexOf(v), dir = to > from ? 1 : -1;
-  localStorage.setItem('view', v); closePopover();
+  localStorage.setItem('view', v); closePopover(); S.pinned.clear();
   if (REDUCED.matches || !main.animate) { S.view = v; render(); return; }
   // The old page becomes a ghost that slips a touch towards where we came from and fades, while the new page
   // arrives from the other side — both at once, on the compositor, so nothing waits and nothing repaints.
