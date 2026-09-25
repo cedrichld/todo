@@ -87,7 +87,7 @@ const S = {
   sel: new Set(), selAnchor: null,  // multi-selection of rows (ids) and the end it grows from
   noteOpen: new Set(),  // ids whose note editor is expanded (session-only, survives re-renders)
   pinned: new Set(),  // rows made in this tab stay on screen until you leave it, even if its filter would hide them
-  fresh: new Map(),  // ids made with Enter → { dated }: their colour (and a Today date) came from where they were made, not from you
+  fresh: new Map(),  // ids made with Enter → { dated: the date Today gave it }: their colour (and a Today date) came from where they were made, not from you
   nodes: new Map(), kids: new Map(), drag: null, query: '', current: null,
   view: localStorage.getItem('view') || 'all',
   hideDone: localStorage.getItem('hideDone') === '1',
@@ -579,7 +579,7 @@ function patchMany(nodes, fields, label) {
 }
 function setPriority(n, p) { if (n.kind !== 'task') return; const ns = withSelection(n); for (const x of ns) S.fresh.delete(x.id); patchMany(ns, { priority: p, color: null }, 'priority'); }
 function setColor(n, hex) { const ns = withSelection(n); for (const x of ns) S.fresh.delete(x.id); patchMany(ns, { color: hex }, 'color'); }
-function setDue(n, date, slot) { const ns = withSelection(n); for (const x of ns) if (S.fresh.has(x.id)) S.fresh.get(x.id).dated = false; patchMany(ns, { due_date: date, due_slot: date ? slot : null }, 'due date'); }
+function setDue(n, date, slot) { const ns = withSelection(n); for (const x of ns) if (S.fresh.has(x.id)) S.fresh.get(x.id).dated = null; patchMany(ns, { due_date: date, due_slot: date ? slot : null }, 'due date'); }
 function toggleFold(n) {
   n.collapsed = n.collapsed ? 0 : 1; render();
   queue.run(() => api.patch(n.id, { collapsed: !!n.collapsed })).catch(showError);
@@ -600,7 +600,7 @@ function enterAt(n, t) {
   return structural(async () => { const r = await api.split(n.id, at, text, parent_id, after_id); if (due) await api.patch(r.nodes[1].id, { due_date: due }); return r; }, r => {
     const id = r.nodes[1].id;
     pushUndo({ type: 'split', id: n.id, tail: id, at, full: text, parent_id, after_id, due, label: 'new item' });
-    S.pinned.add(id); S.fresh.set(id, { dated: !!due });
+    S.pinned.add(id); S.fresh.set(id, { dated: due });
     return { id, caret: 0 };
   });
 }
@@ -701,17 +701,25 @@ function indent(n, caret) {
   const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n);
   const shown = sibs.slice(0, Math.max(i, 0)).findLast(s => $(`#view .node[data-id="${s.id}"]`));  // the row above on screen, past any this tab hides
   const prev = shown || (S.view === 'all' && i > 0 ? sibs[i - 1] : null); if (!prev) return toast('Nothing above to nest under');
-  const last = kidsOf(prev.id).at(-1), patch = {}, f = S.fresh.get(n.id);
-  if (n.kind === 'task' && prev.kind === 'task') {
-    // a task with no colour of its own, or one just made with Enter, takes the colour of the task it now sits under
-    if ((f || (n.priority === 'none' && !n.color)) && (n.priority !== prev.priority || n.color !== prev.color)) Object.assign(patch, { priority: prev.priority, color: prev.color });
-    if (f?.dated && dueBy(prev)) { Object.assign(patch, { due_date: null, due_slot: null }); f.dated = false; }  // the parent's date already puts it on Today
-  }
-  return moveNode(n, prev.id, last ? last.id : null, caret, prev.collapsed ? () => api.patch(prev.id, { collapsed: false }) : null, patch);
+  const last = kidsOf(prev.id).at(-1);
+  return moveNode(n, prev.id, last ? last.id : null, caret, prev.collapsed ? () => api.patch(prev.id, { collapsed: false }) : null, nestPatch(n, prev));
 }
 function outdent(n, caret) {
   const p = S.nodes.get(n.parent_id); if (!p) return toast('Already at the top level');
-  return moveNode(n, p.parent_id, p.id, caret);
+  return moveNode(n, p.parent_id, p.id, caret, null, nestPatch(n, getNode(p.parent_id)));
+}
+// Every Tab / Shift+Tab re-checks a task's colour: if it came from where the task sat (just made with Enter, none of its own,
+// or the same as its parent's), it follows the task it now sits under, or goes clear outside any task. A colour you chose sticks.
+function nestPatch(n, parent) {
+  const patch = {}; if (n.kind !== 'task') return patch;
+  const f = S.fresh.get(n.id), old = getNode(n.parent_id), same = (a, b) => a.priority === b.priority && (a.color || null) === (b.color || null);
+  const fromDate = n.priority === 'urgent' && !n.color && n.due_date && n.auto_urgent === n.due_date;  // red because it is due, not because of its parent
+  const want = parent?.kind === 'task' ? { priority: parent.priority, color: parent.color || null } : { priority: 'none', color: null };
+  if ((f || (n.priority === 'none' && !n.color) || (old?.kind === 'task' && same(n, old) && !fromDate)) && !same(n, want)) Object.assign(patch, want);
+  // on Today's due list, a new task keeps a date only while no task above it carries one
+  if (f?.dated && n.due_date === f.dated && dueBy(parent)) Object.assign(patch, { due_date: null, due_slot: null });
+  else if (f && !n.due_date && S.view === 'today' && S.todayMode === 'due' && !dueBy(parent)) { patch.due_date = f.dated = todayISO(); }
+  return patch;
 }
 // Alt+↑/↓: swap with a sibling; at the edge of a section, hop into the neighbouring section.
 function moveVert(n, dir, caret) {

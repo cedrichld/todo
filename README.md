@@ -28,7 +28,7 @@ Tests: `python3 -m unittest discover -s tests -v`
 |---|---|
 | Enter | new item below (splits at cursor); on a heading: first child |
 | Backspace on empty | delete item |
-| Tab / Shift+Tab | nest / un-nest (works from the checkbox, dot or menu too, and on the Today and Waiting tabs); a nested task with no colour of its own, or one just made with Enter, takes its parent task's colour |
+| Tab / Shift+Tab | nest / un-nest (works from the checkbox, dot or menu too, and on the Today and Waiting tabs); every Tab / Shift+Tab re-checks the colour: a task whose colour came from where it sat (just made with Enter, none of its own, or the same as its old parent's) takes the colour of the task it now sits under, or goes clear outside any task; a colour you picked yourself stays |
 | Alt+↑ / Alt+↓ | move up / down (hops out of / into neighbouring sections) |
 | Ctrl+/ | move to section… (type to filter, Enter picks) |
 | Ctrl+Z / Ctrl+Y | undo / redo (Ctrl+Shift+Z also redoes) |
