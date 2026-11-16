@@ -656,3 +656,133 @@ class DoneHistory(StoreTestCase):
         self.assertEqual(self.s._compact_history(), 7)
         self.assertEqual(self.rows(t['id']), ['done'])
         self.assertEqual(self.s._compact_history(), 0)
+
+
+class MultiDayDue(StoreTestCase):
+    """A task can be due on several days: `due_days` holds them all, `due_date` is always the first."""
+
+    def setUp(self):
+        super().setUp()
+        self.t = self.s.create(text='Autograder', priority='later')
+        self.today = datetime.date.today()
+
+    def d(self, days):
+        return (self.today + datetime.timedelta(days=days)).isoformat()
+
+    def days(self, *offsets):
+        return ','.join(self.d(k) for k in offsets)
+
+    def test_days_are_sorted_deduped_and_first_is_due_date(self):
+        n = self.s.update(self.t['id'], due_days=self.days(13, 11, 13))
+        self.assertEqual((n['due_date'], n['due_days']), (self.d(11), self.days(11, 13)))
+
+    def test_one_day_or_none_collapses(self):
+        n = self.s.update(self.t['id'], due_days=self.d(12))
+        self.assertEqual((n['due_date'], n['due_days']), (self.d(12), None))
+        self.s.update(self.t['id'], due_days=self.days(12, 13))
+        n = self.s.update(self.t['id'], due_days='')
+        self.assertEqual((n['due_date'], n['due_days']), (None, None))
+        self.s.update(self.t['id'], due_days=self.days(12, 13))
+        n = self.s.update(self.t['id'], due_days=None)
+        self.assertEqual((n['due_date'], n['due_days']), (None, None))
+
+    def test_bad_day_is_rejected(self):
+        for bad in ('2026-11-17,soon', '2026-11-17,,2026-11-18', '2026-13-01', 17):
+            with self.assertRaises(StoreError):
+                self.s.update(self.t['id'], due_days=bad)
+        self.assertIsNone(self.s.get(self.t['id'])['due_date'])
+
+    def test_due_date_alone_makes_it_single_day_only_if_it_changes(self):
+        self.s.update(self.t['id'], due_days=self.days(11, 12))
+        self.assertEqual(self.s.update(self.t['id'], due_date=self.d(11))['due_days'], self.days(11, 12))
+        n = self.s.update(self.t['id'], due_date=self.d(15))
+        self.assertEqual((n['due_date'], n['due_days']), (self.d(15), None))
+        self.s.update(self.t['id'], due_days=self.days(11, 12))
+        n = self.s.update(self.t['id'], due_date=None)
+        self.assertEqual((n['due_date'], n['due_days']), (None, None))
+
+    def test_days_win_over_a_due_date_sent_with_them(self):
+        n = self.s.update(self.t['id'], due_date=self.d(20), due_days=self.days(11, 12))
+        self.assertEqual((n['due_date'], n['due_days']), (self.d(11), self.days(11, 12)))
+        n = self.s.update(self.t['id'], due_date=self.d(20), due_days=None)  # what the page sends for a single day
+        self.assertEqual((n['due_date'], n['due_days']), (self.d(20), None))
+
+    def test_sweep_keeps_the_days(self):
+        self.s.conn.execute('UPDATE nodes SET due_date=?, due_days=? WHERE id=?', (self.d(1), self.days(1, 2), self.t['id']))
+        self.s.conn.commit()
+        self.assertEqual(self.s.sweep_due(), [self.t['id']])
+        n = self.s.get(self.t['id'])
+        self.assertEqual((n['priority'], n['due_date'], n['due_days']), ('urgent', self.d(1), self.days(1, 2)))
+
+    def test_goes_red_once_for_the_first_day(self):
+        self.assertEqual(self.s.update(self.t['id'], due_days=self.days(1, 2, 3))['priority'], 'urgent')
+        self.s.update(self.t['id'], priority='later')
+        self.assertEqual(self.s.update(self.t['id'], due_days=self.days(1, 2, 3, 4))['priority'], 'later')  # a longer run is no new reason
+        self.assertEqual(self.s.sweep_due(), [])
+
+    def test_undo_and_redo_of_a_date_that_turned_it_red(self):
+        before = self.s.get(self.t['id'])
+        after = self.s.update(self.t['id'], due_days=self.days(0, 1))
+        self.assertEqual((after['priority'], after['auto_urgent']), ('urgent', self.d(0)))
+        # Ctrl+Z sends back every field the change touched, the ones the store set on its own included
+        back = self.s.update(self.t['id'], due_date=None, due_days=None, due_slot=None, priority=before['priority'], auto_urgent=before['auto_urgent'])
+        self.assertEqual((back['due_date'], back['due_days'], back['priority'], back['auto_urgent']), (None, None, 'later', None))
+        again = self.s.update(self.t['id'], due_date=self.d(0), due_days=self.days(0, 1), due_slot=None, priority='urgent', auto_urgent=self.d(0))
+        self.assertEqual((again['due_days'], again['priority'], again['auto_urgent']), (self.days(0, 1), 'urgent', self.d(0)))
+
+    def test_putting_a_date_back_keeps_the_colour_you_chose(self):
+        self.s.update(self.t['id'], due_date=self.d(0))
+        self.s.update(self.t['id'], priority='soon')
+        self.assertIsNone(self.s.update(self.t['id'], due_date=None)['auto_urgent'])
+        n = self.s.update(self.t['id'], due_date=self.d(0), due_days=None, due_slot=None, auto_urgent=self.d(0))  # undoing the clear
+        self.assertEqual((n['priority'], n['auto_urgent']), ('soon', self.d(0)))
+
+    def test_bad_auto_urgent_is_rejected(self):
+        with self.assertRaisesRegex(StoreError, 'bad auto_urgent'):
+            self.s.update(self.t['id'], auto_urgent='soon')
+
+    def test_not_red_while_the_first_day_is_far(self):
+        self.assertEqual(self.s.update(self.t['id'], due_days=self.days(5, 6))['priority'], 'later')
+
+    def test_heading_drops_the_days(self):
+        self.s.update(self.t['id'], due_days=self.days(11, 12))
+        n = self.s.update(self.t['id'], kind='heading')
+        self.assertEqual((n['due_date'], n['due_days']), (None, None))
+
+    def test_history_and_time_travel_carry_the_days(self):
+        self.s.update(self.t['id'], due_days=self.days(11, 12), due_slot='morning')
+        self.assertIn(self.days(11, 12) + ' morning', [r['new'] for r in self.chrono('edit') if r['field'] == 'due'])
+        y = (datetime.datetime.now().astimezone() - datetime.timedelta(days=1)).replace(hour=10)
+        self.s.conn.execute('UPDATE history SET ts=?', (y.isoformat(timespec='milliseconds'),))
+        self.s.conn.execute('DELETE FROM snapshots'); self.s.conn.commit()
+        self.s.update(self.t['id'], due_date=self.d(19))
+        self.assertEqual([(r['old'], r['new']) for r in self.chrono('edit') if r['field'] == 'due'][-1],
+                         (self.days(11, 12) + ' morning', self.d(19) + ' morning'))
+        then = {n['id']: n for n in self.s.snapshot(y.date().isoformat())['nodes']}[self.t['id']]
+        self.assertEqual((then['due_date'], then['due_days'], then['due_slot']), (self.d(11), self.days(11, 12), 'morning'))
+
+    def test_overdue_counts_from_the_last_day(self):
+        self.s.update(self.t['id'], due_days=self.days(-3, 1))
+        self.assertEqual(self.s.insights()['totals']['overdue'], 0)
+        self.s.update(self.t['id'], due_days=self.days(-3, -1))
+        self.assertEqual(self.s.insights()['totals']['overdue'], 1)
+
+    def test_mirror_writes_the_days(self):
+        self.s.update(self.t['id'], due_days='2030-01-30,2030-01-31,2030-02-01', due_slot='evening')
+        with open(self.md) as f:
+            self.assertIn('- [ ] Autograder !later @2030-01-30..2030-02-01/evening', f.read())
+
+    def test_old_database_gains_the_column(self):
+        old = os.path.join(self.dir, 'old.db')
+        con = sqlite3.connect(old)
+        con.executescript(SCHEMA.replace('  due_days    TEXT,\n', ''))
+        self.assertNotIn('due_days', {r[1] for r in con.execute('PRAGMA table_info(nodes)')})
+        con.execute("INSERT INTO nodes(parent_id, position, kind, text, due_date, created_at, updated_at) VALUES (NULL, 0, 'task', 'legacy', '2030-01-05', 't', 't')")
+        con.commit(); con.close()
+        s2 = Store(old)
+        try:
+            n = s2.tree()[0]
+            self.assertEqual((n['due_date'], n['due_days']), ('2030-01-05', None))
+            self.assertEqual(s2.update(1, due_days='2030-01-05,2030-01-06')['due_days'], '2030-01-05,2030-01-06')
+        finally:
+            s2.close()

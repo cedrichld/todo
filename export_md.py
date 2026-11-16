@@ -1,6 +1,18 @@
 """Markdown mirror of the todo tree: human-readable backup, never read back by the app."""
+import datetime
 import os
 import tempfile
+
+
+def _due_tag(n):
+    """@day, or @first..last for a run of days; several runs or days are comma-separated; /slot last."""
+    runs = []
+    for d in (n.get('due_days') or n['due_date']).split(','):
+        if runs and datetime.date.fromisoformat(d) - datetime.date.fromisoformat(runs[-1][-1]) == datetime.timedelta(days=1):
+            runs[-1].append(d)
+        else:
+            runs.append([d])
+    return '@' + ','.join(r[0] if len(r) == 1 else f'{r[0]}..{r[-1]}' for r in runs) + ('/' + n['due_slot'] if n['due_slot'] else '')
 
 
 def _note_lines(n, indent):
@@ -33,7 +45,7 @@ def render(nodes):
                 if n['color']:
                     tags.append('color=' + n['color'])
                 if n['due_date']:
-                    tags.append('@' + n['due_date'] + ('/' + n['due_slot'] if n['due_slot'] else ''))
+                    tags.append(_due_tag(n))
                 if n.get('waiting_on') and not n['done_at']:
                     since = n.get('waiting_since') or ''
                     tags.append('(waiting on ' + n['waiting_on'] + (' since ' + since[:10] if since else '') + ')')

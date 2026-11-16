@@ -16,7 +16,8 @@ import export_md
 PRIORITIES = ('urgent', 'soon', 'normal', 'later', 'none')
 SLOTS = ('morning', 'afternoon', 'evening')
 KINDS = ('heading', 'task')
-EDITABLE = ('text', 'priority', 'color', 'due_date', 'due_slot', 'kind', 'collapsed', 'waiting_on', 'waiting_since', 'note')
+EDITABLE = ('text', 'priority', 'color', 'due_date', 'due_days', 'due_slot', 'kind', 'collapsed', 'waiting_on', 'waiting_since', 'note',
+            'auto_urgent')  # auto_urgent: only so that undo can put back what a date change set on its own
 TEXT_COALESCE_SECONDS = 120  # successive text edits within this window share one history row
 _UNSET = object()
 
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS nodes (
               CHECK (priority IN ('urgent','soon','normal','later','none')),
   color       TEXT,
   due_date    TEXT,
+  due_days    TEXT,
   due_slot    TEXT CHECK (due_slot IN ('morning','afternoon','evening')),
   collapsed   INTEGER NOT NULL DEFAULT 0,
   done_at     TEXT,
@@ -67,8 +69,31 @@ def now_iso():
     return datetime.datetime.now().astimezone().isoformat(timespec='milliseconds')
 
 
+def _days(n):
+    """Every day a node is due on, earliest first. `due_days` holds them when there are several;
+    `due_date` is always the first (or the only) one."""
+    if n.get('due_days'):
+        return n['due_days'].split(',')
+    return [n['due_date']] if n.get('due_date') else []
+
+
+def _norm_days(v):
+    """'2026-11-18,2026-11-17' (or None / '') → the days, checked, unique, earliest first."""
+    if v is None or v == '':
+        return []
+    if not isinstance(v, str):
+        raise StoreError(f'bad due_days {v!r}')
+    days = set()
+    for part in v.split(','):
+        try:
+            days.add(datetime.date.fromisoformat(part.strip()).isoformat())
+        except ValueError:
+            raise StoreError(f'bad due_days {v!r}') from None
+    return sorted(days)
+
+
 def _due_str(n):
-    return ' '.join(x for x in (n.get('due_date'), n.get('due_slot')) if x)
+    return ' '.join(x for x in (','.join(_days(n)), n.get('due_slot')) if x)
 
 
 def _s(v):
@@ -103,7 +128,7 @@ class Store:
     def _migrate(self):
         """Columns added after the first release; older databases get them on open."""
         cols = {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}
-        for col in ('waiting_on', 'waiting_since', 'note', 'auto_urgent'):
+        for col in ('waiting_on', 'waiting_since', 'note', 'auto_urgent', 'due_days'):
             if col not in cols:
                 self.conn.execute(f'ALTER TABLE nodes ADD COLUMN {col} TEXT')
         self.conn.commit()
@@ -224,7 +249,9 @@ class Store:
                     n['kind'] = old or n['kind']
                 elif f == 'due':
                     parts = old.split(' ')
-                    n['due_date'] = parts[0] or None
+                    days = [d for d in parts[0].split(',') if d]
+                    n['due_date'] = days[0] if days else None
+                    n['due_days'] = parts[0] if len(days) > 1 else None
                     n['due_slot'] = parts[1] if len(parts) > 1 else None
         for n in nodes.values():
             if n['parent_id'] is not None and n['parent_id'] not in nodes:
@@ -300,7 +327,7 @@ class Store:
             p = self.path(n['id'])
             key = p[0] if p else '(top level)'
             open_by_section[key] = open_by_section.get(key, 0) + 1
-        overdue = sum(1 for n in live if not n['done_at'] and n['due_date'] and n['due_date'] < today.isoformat())
+        overdue = sum(1 for n in live if not n['done_at'] and _days(n) and _days(n)[-1] < today.isoformat())  # past its last day
         return {
             'days': days, 'done': done, 'created': created, 'open': open_series,
             'by_hour': by_hour, 'by_dow': by_dow,
@@ -362,11 +389,12 @@ class Store:
             raise StoreError(f"bad priority {f['priority']!r}")
         if f.get('due_slot') is not None and f['due_slot'] not in SLOTS:
             raise StoreError(f"bad due_slot {f['due_slot']!r}")
-        if f.get('due_date') is not None:
-            try:
-                datetime.date.fromisoformat(f['due_date'])
-            except (TypeError, ValueError):
-                raise StoreError(f"bad due_date {f['due_date']!r}") from None
+        for k in ('due_date', 'auto_urgent'):
+            if f.get(k) is not None:
+                try:
+                    datetime.date.fromisoformat(f[k])
+                except (TypeError, ValueError):
+                    raise StoreError(f"bad {k} {f[k]!r}") from None
         if f.get('color') is not None and not re.fullmatch(r'#[0-9a-fA-F]{6}', str(f['color'])):
             raise StoreError(f"bad color {f['color']!r}")
         if 'text' in f and not isinstance(f['text'], str):
@@ -429,6 +457,14 @@ class Store:
         with self._tx():
             old = self.get(node_id)
             ts = now_iso()
+            if 'due_days' in fields:  # the days are the truth: due_date follows as the first of them
+                days = _norm_days(fields['due_days'])
+                if days:
+                    fields = {**fields, 'due_date': days[0], 'due_days': ','.join(days) if len(days) > 1 else None}
+                else:  # no list: whatever single date came with it stands, or no date at all
+                    fields = {'due_date': None, **fields, 'due_days': None}
+            elif 'due_date' in fields and fields['due_date'] != old['due_date']:
+                fields = {**fields, 'due_days': None}  # re-dated by one date: a single day again
             changes = {}
             for k, v in fields.items():
                 if k == 'collapsed':
@@ -447,7 +483,7 @@ class Store:
                 del changes['waiting_since']
             auto = set()  # fields changed as a side effect (becoming a heading, coming due); logged differently or not at all
             if changes.get('kind') == 'heading':
-                for k, v in (('priority', 'none'), ('due_date', None), ('due_slot', None), ('done_at', None),
+                for k, v in (('priority', 'none'), ('due_date', None), ('due_days', None), ('due_slot', None), ('done_at', None),
                              ('waiting_on', None), ('waiting_since', None)):
                     if old[k] != v:
                         changes[k] = v
@@ -472,7 +508,7 @@ class Store:
                 return old
             snapshot = changes.get('text', old['text'])
             for k, v in changes.items():
-                if k in ('collapsed', 'done_at', 'due_date', 'due_slot', 'waiting_since', 'auto_urgent'):
+                if k in ('collapsed', 'done_at', 'due_date', 'due_days', 'due_slot', 'waiting_since', 'auto_urgent'):
                     continue
                 if k in auto:
                     if k == 'priority' and due_auto:
@@ -488,7 +524,7 @@ class Store:
             if 'waiting_since' in changes and 'waiting_on' not in changes and old['waiting_on'] and 'waiting_since' not in auto:
                 self._log(node_id, 'edit', field='waiting', old=old['waiting_on'], new=old['waiting_on'] + ' (bumped)',
                           snapshot=snapshot, ts=ts)
-            if ('due_date' in changes or 'due_slot' in changes) and not auto & {'due_date', 'due_slot'}:
+            if {'due_date', 'due_days', 'due_slot'} & set(changes) and not auto & {'due_date', 'due_days', 'due_slot'}:
                 self._log(node_id, 'edit', field='due', old=_due_str(old),
                           new=_due_str({**old, **changes}), snapshot=snapshot, ts=ts)
             sets = ', '.join(f'{k}=?' for k in changes)

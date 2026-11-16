@@ -44,6 +44,22 @@ class Render(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(export_md.render([]), '\n')
 
+    def test_days_in_the_mirror(self):
+        nodes = [
+            node(1, None, 0, 'task', 'run', due_date='2026-11-17', due_days='2026-11-17,2026-11-18,2026-11-19', due_slot='morning'),
+            node(2, None, 1, 'task', 'over the month end', due_date='2026-11-30', due_days='2026-11-30,2026-12-01'),
+            node(3, None, 2, 'task', 'scattered', due_date='2026-11-17', due_days='2026-11-17,2026-11-19'),
+            node(4, None, 3, 'task', 'two runs', due_date='2026-11-17', due_days='2026-11-17,2026-11-18,2026-11-20,2026-11-21,2026-11-25'),
+            node(5, None, 4, 'task', 'one day', due_date='2026-11-17'),
+        ]
+        self.assertEqual(export_md.render(nodes), (
+            '- [ ] run @2026-11-17..2026-11-19/morning\n'
+            '- [ ] over the month end @2026-11-30..2026-12-01\n'
+            '- [ ] scattered @2026-11-17,2026-11-19\n'
+            '- [ ] two runs @2026-11-17..2026-11-18,2026-11-20..2026-11-21,2026-11-25\n'
+            '- [ ] one day @2026-11-17\n'
+        ))
+
     def test_write_is_atomic_and_replaces(self):
         d = tempfile.mkdtemp()
         path = os.path.join(d, 'todo.md')

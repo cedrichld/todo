@@ -12,16 +12,30 @@ const PRIO_LABEL = { urgent: 'Urgent', soon: 'Soon', normal: 'Normal', later: 'L
 const PRIO_ORDER = { urgent: 0, soon: 1, normal: 2, later: 3, none: 4 };
 const PRIO_COLOR = { urgent: 'var(--urgent)', soon: 'var(--soon)', normal: 'var(--normal)', later: 'var(--later)' };
 
-function todayISO() { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+function todayISO() { return isoOf(new Date()); }
 function parseISO(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+const shiftISO = (iso, k) => { const d = parseISO(iso); d.setDate(d.getDate() + k); return isoOf(d); };  // k calendar days later, whatever the clocks do
+// A task can be due on several days: due_days lists them all (sorted, comma-separated) once there are two or more; due_date is always the first.
+const daysOf = n => n.due_days ? n.due_days.split(',') : n.due_date ? [n.due_date] : [];
+// The day that counts now: the next one still ahead (today included), or the last one once they have all passed.
+function dueDay(n, t = todayISO()) { const ds = daysOf(n); return ds.find(d => d >= t) ?? ds.at(-1) ?? null; }
+// On Today's list by its own days: one of them is today, or the last has passed. The days between its days are days off.
+function onToday(n, t = todayISO()) { const ds = daysOf(n); return ds.length > 0 && (ds.includes(t) || ds.at(-1) < t); }
+function dayLabel(iso, t = todayISO()) {
+  const d = parseISO(iso), diff = Math.round((d - parseISO(t)) / 86400000);
+  return diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff > 1 && diff < 7 ? DAY[d.getDay()] : `${MON[d.getMonth()]} ${d.getDate()}`;
+}
+// "Today"; "Today → Thu" for a run of days; "Today +2" when the days ahead are scattered; the last day once it is overdue.
 function chipText(n) {
-  if (!n.due_date) return '';
-  const d = parseISO(n.due_date), diff = Math.round((d - parseISO(todayISO())) / 86400000);
-  let label = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff > 1 && diff < 7 ? DAY[d.getDay()] : `${MON[d.getMonth()]} ${d.getDate()}`;
+  const ds = daysOf(n); if (!ds.length) return '';
+  const t = todayISO(), at = dueDay(n, t), ahead = ds.filter(d => d > at);
+  let label = dayLabel(at, t);
+  if (ahead.length) label += ahead.every((d, i) => d === shiftISO(at, i + 1)) ? ` → ${dayLabel(ahead.at(-1), t)}` : ` +${ahead.length}`;
   if (n.due_slot) label += ' · ' + SLOT_LABEL[n.due_slot];
   return label;
 }
-const isOverdue = n => !!n.due_date && !n.done_at && n.due_date < todayISO();
+const isOverdue = n => !n.done_at && daysOf(n).length > 0 && daysOf(n).at(-1) < todayISO();  // only once its last day has passed
 function fmtDay(iso) { const d = parseISO(iso); const y = d.getFullYear() === new Date().getFullYear() ? '' : ` ${d.getFullYear()}`; return `${DAY[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}${y}`; }
 function fmtTime(iso) { const d = new Date(iso); return `${MON[d.getMonth()]} ${d.getDate()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove('show'), 2200); }
@@ -221,8 +235,7 @@ function render() {
 }
 function tabCounts() {
   const t = todayISO(); let today = 0, waiting = 0;
-  const dueBy = n => { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (c.due_date && c.due_date <= t) return true; } return false; };
-  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if (dueBy(n)) today++; if (n.waiting_on) waiting++; }
+  for (const n of S.nodes.values()) if (n.kind === 'task' && !n.done_at) { if (dueBy(n, t)) today++; if (n.waiting_on) waiting++; }
   for (const b of $$('#tabs button')) {
     const c = { today, waiting }[b.dataset.view]; let badge = $('b', b);
     if (!c) { badge?.remove(); continue; }
@@ -302,14 +315,16 @@ function applyStyle(el, n) {
   if (dot) { const c = n.color || PRIO_COLOR[n.priority] || ''; dot.style.background = c; dot.style.borderColor = c || ''; }
   const chip = $(':scope > .row > .chip', el);
   if (chip) {
+    const ds = daysOf(n);
     chip.textContent = chipText(n) || '+ due';  // real text: a button with only ::before content breaks the row's baseline layout
-    chip.classList.toggle('empty', !n.due_date);
+    chip.title = ds.length > 1 ? `${ds.map(fmtDay).join(' · ')} (Ctrl+D)` : 'Due (Ctrl+D)';
+    chip.classList.toggle('empty', !ds.length);
     chip.classList.toggle('overdue', isOverdue(n));
-    chip.classList.toggle('today', n.due_date === todayISO() && !n.done_at);
+    chip.classList.toggle('today', ds.includes(todayISO()) && !n.done_at);
   }
   const kd = $(':scope > .row > .kids-due', el);
   if (kd) {  // what the sub-tasks are due, in one subtle line: nearest first, trimmed with an ellipsis
-    const dates = new Set(); (function walk(id) { for (const k of kidsOf(id)) { if (k.kind === 'task' && !k.done_at && k.due_date) dates.add(k.due_date); walk(k.id); } })(n.id);
+    const dates = new Set(); (function walk(id) { for (const k of kidsOf(id)) { if (k.kind === 'task' && !k.done_at && k.due_date) dates.add(dueDay(k)); walk(k.id); } })(n.id);
     const list = [...dates].sort(), t = todayISO();
     kd.textContent = list.length ? '↳ ' + list.slice(0, 3).map(d => chipText({ due_date: d })).join(' · ') + (list.length > 3 ? ' …' : '') : '';
     kd.title = list.length ? `Sub-tasks due: ${list.map(fmtDay).join(', ')}` : '';
@@ -541,7 +556,7 @@ function placeOf(n) { const sibs = kidsOf(n.parent_id), i = sibs.indexOf(n); ret
 function patchFields(n, fields, label) {
   const old = {}, nu = {};
   for (const k of Object.keys(fields)) { old[k] = n[k]; nu[k] = fields[k]; }
-  if (fields.kind === 'heading') { for (const k of ['priority', 'due_date', 'due_slot', 'done_at']) old[k] = n[k]; Object.assign(n, { priority: 'none', due_date: null, due_slot: null, done_at: null }); }
+  if (fields.kind === 'heading') { for (const k of ['priority', 'due_date', 'due_days', 'due_slot', 'done_at']) old[k] = n[k]; Object.assign(n, { priority: 'none', due_date: null, due_days: null, due_slot: null, done_at: null }); }
   Object.assign(n, fields);
   const entry = { type: 'patch', id: n.id, old, new: nu, label };
   pushUndo(entry);
@@ -579,7 +594,14 @@ function patchMany(nodes, fields, label) {
 }
 function setPriority(n, p) { if (n.kind !== 'task') return; const ns = withSelection(n); for (const x of ns) S.fresh.delete(x.id); patchMany(ns, { priority: p, color: null }, 'priority'); }
 function setColor(n, hex) { const ns = withSelection(n); for (const x of ns) S.fresh.delete(x.id); patchMany(ns, { color: hex }, 'color'); }
-function setDue(n, date, slot) { const ns = withSelection(n); for (const x of ns) if (S.fresh.has(x.id)) S.fresh.get(x.id).dated = null; patchMany(ns, { due_date: date, due_slot: date ? slot : null }, 'due date'); }
+// Every day the task is due on, as one change (one undo step): due_date is the first, due_days the whole list once there are several.
+function setDays(n, days, slot) {
+  days = [...new Set(days)].sort(); slot = days.length ? slot ?? null : null;
+  const ns = withSelection(n);
+  if (ns.length === 1 && days.join() === daysOf(n).join() && slot === (n.due_slot ?? null)) return;
+  for (const x of ns) { if (S.fresh.has(x.id)) S.fresh.get(x.id).dated = null; if (S.view === 'today') S.pinned.delete(x.id); }  // re-dated on Today, a row you typed there may leave like any other
+  patchMany(ns, { due_date: days[0] ?? null, due_days: days.length > 1 ? days.join(',') : null, due_slot: slot }, 'due date');
+}
 function toggleFold(n) {
   n.collapsed = n.collapsed ? 0 : 1; render();
   queue.run(() => api.patch(n.id, { collapsed: !!n.collapsed })).catch(showError);
@@ -645,7 +667,7 @@ function moveMany(nodes, parent_id, after_id, before) {
 // Sort by urgency: within every parent under `root` (or the whole list), sub-sections keep their order and come first,
 // then tasks by priority (custom colour after later, none last), open before done, earlier due date first, ties keep their order.
 const URGENCY = { urgent: 0, soon: 1, normal: 2, later: 3, none: 5 };
-const urgencyKey = n => [n.done_at ? 1 : 0, n.color && n.priority === 'none' ? 4 : URGENCY[n.priority] ?? 5, n.due_date || '9999'];
+const urgencyKey = n => [n.done_at ? 1 : 0, n.color && n.priority === 'none' ? 4 : URGENCY[n.priority] ?? 5, dueDay(n) || '9999'];
 function sortByUrgency(rootId = null, opts = {}) {
   const changes = [];
   (function walk(pid) {
@@ -857,17 +879,27 @@ function onGlobalKey(e) {
 }
 
 // ---------------------------------------------------------------- popovers
+let popClose = null;  // set by the open popover's content (content.onPopClose): run once it goes away, however it is closed
+let mouseHeld = false;  // a press is in progress: redrawing the rows now would swallow the click it ends in
+document.addEventListener('mousedown', () => { mouseHeld = true; }, true);
+document.addEventListener('mouseup', () => { mouseHeld = false; }, true);
+function renderSoon() { if (!mouseHeld) return render(); document.addEventListener('mouseup', () => setTimeout(render, 0), { once: true, capture: true }); }
 function openPopover(anchor, content, { fixed = false, kind = '' } = {}) {
   const pop = $('#popover');
+  if (popClose) {  // one popover replaces another: the old one finishes first, which may redraw the rows and so replace the anchor
+    const id = anchor.closest?.('.node')?.dataset.id, cls = anchor.classList?.[0];
+    closePopover();
+    if (!anchor.isConnected) { anchor = id && cls ? $(`.node[data-id="${id}"] > .row > .${cls}`) : null; if (!anchor) return; }
+  }
   pop.innerHTML = ''; pop.appendChild(content); pop.hidden = false; pop.classList.toggle('fixed', fixed);  // fixed: anchored to the sticky bar, stays put while the page scrolls
   const r = anchor.getBoundingClientRect(), sx = fixed ? 0 : window.scrollX, sy = fixed ? 0 : window.scrollY;
   let left = r.left + sx, top = r.bottom + sy + 4;
   pop.style.left = '0px'; pop.style.top = '0px';
   const w = pop.offsetWidth; if (left + w > sx + window.innerWidth - 8) left = Math.max(8, sx + window.innerWidth - w - 8);
   pop.style.left = left + 'px'; pop.style.top = top + 'px';
-  pop.dataset.for = anchor.closest('.node')?.dataset.id || ''; pop.dataset.kind = kind;
+  pop.dataset.for = anchor.closest('.node')?.dataset.id || ''; pop.dataset.kind = kind; popClose = content.onPopClose || null;
 }
-function closePopover() { const pop = $('#popover'); pop.hidden = true; pop.innerHTML = ''; pop.dataset.kind = ''; }
+function closePopover() { const pop = $('#popover'), after = popClose; popClose = null; pop.hidden = true; pop.innerHTML = ''; pop.dataset.kind = ''; after?.(); }
 function priorityPicker(n) {
   const box = document.createElement('div'); box.className = 'picker';
   for (const p of ['urgent', 'soon', 'normal', 'later']) {
@@ -885,15 +917,31 @@ function priorityPicker(n) {
   box.appendChild(clear);
   return box;
 }
+// The calendar. Click a day: that day only. Ctrl+click: add or remove a day. Shift+click: every day up to it.
 function duePicker(n) {
   const box = document.createElement('div'); box.className = 'due'; box.tabIndex = -1;
-  const back = document.activeElement;  // where the keys go back to once a date is picked
-  const cur = n.due_date ? parseISO(n.due_date) : new Date(); cur.setHours(12, 0, 0, 0);  // the keyboard cursor: starts on the due date, else today
-  const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const back = document.activeElement, fromText = !!back?.classList?.contains('text');  // where the keys go back to once the calendar closes
+  const cur = parseISO(dueDay(n) || todayISO()); cur.setHours(12, 0, 0, 0);  // the keyboard cursor: starts on the next day the task is due, else today
   const ym = { y: cur.getFullYear(), m: cur.getMonth() };
-  const done = () => { closePopover(); if (back?.classList?.contains('text') && back.isConnected) focusNode(n.id, 'end'); else if (back?.isConnected) back.focus(); };
-  const pick = iso => { cur.setTime(parseISO(iso).getTime()); cur.setHours(12); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); setDue(n, iso, n.due_slot); draw(); };
-  const shiftMonth = k => { const day = cur.getDate(); cur.setDate(1); cur.setMonth(cur.getMonth() + k); cur.setDate(Math.min(day, new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate())); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); draw(); };
+  // Shift fills every day from `anchor` (the day last clicked or toggled; null = wherever the cursor is) on top of `base`, the days
+  // picked before that run began: a second Shift+click moves the end of the run instead of starting another.
+  let anchor = null, base = [];
+  let armed = true;  // the cursor moved since the last pick (or nothing is picked yet): Enter picks the day it is on
+  const opened = daysOf(n).join();
+  // On Today, a task joins or leaves the list once the calendar closes, not while its days are still being picked.
+  box.onPopClose = () => { if (S.view === 'today' && daysOf(n).join() !== opened) renderSoon(); };
+  const done = () => { closePopover(); if (fromText && $(`.node[data-id="${n.id}"]`)) focusNode(n.id, 'end'); else if (back?.isConnected) back.focus(); };
+  const goTo = iso => { cur.setTime(parseISO(iso).getTime()); cur.setHours(12); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); };
+  const put = days => { armed = false; setDays(n, days, n.due_slot); draw(); };
+  const only = iso => { goTo(iso); anchor = iso; base = [iso]; put([iso]); };
+  const toggle = iso => { goTo(iso); const ds = daysOf(n); anchor = iso; base = ds.includes(iso) ? ds.filter(d => d !== iso) : [...ds, iso]; put(base); };
+  const stretch = iso => {
+    if (anchor == null) { anchor = isoOf(cur); base = daysOf(n); }
+    goTo(iso);
+    const run = []; for (let d = anchor < iso ? anchor : iso, end = anchor < iso ? iso : anchor; d <= end; d = shiftISO(d, 1)) run.push(d);
+    put([...base, ...run]);
+  };
+  const shiftMonth = k => { const day = cur.getDate(); cur.setDate(1); cur.setMonth(cur.getMonth() + k); cur.setDate(Math.min(day, new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate())); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); armed = true; draw(); };
   const draw = () => {
     box.innerHTML = '';
     const head = document.createElement('div'); head.className = 'cal-head';
@@ -902,15 +950,17 @@ function duePicker(n) {
     $('.next', head).onclick = () => shiftMonth(1);
     box.appendChild(head);
     const grid = document.createElement('div'); grid.className = 'cal-grid';
+    grid.onmousedown = e => { if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault(); };  // a modifier click picks days; it must not select text on the way
     for (const d of ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']) { const s = document.createElement('span'); s.className = 'dow'; s.textContent = d; grid.appendChild(s); }
     // whole weeks: the ends of the months either side fill the first and last rows, faded but pickable
     const first = new Date(ym.y, ym.m, 1, 12), lead = (first.getDay() + 6) % 7, days = new Date(ym.y, ym.m + 1, 0).getDate();
-    const cells = Math.ceil((lead + days) / 7) * 7, today = todayISO(), at = isoOf(cur);
+    const cells = Math.ceil((lead + days) / 7) * 7, today = todayISO(), at = isoOf(cur), sel = new Set(daysOf(n));
     for (let i = 0; i < cells; i++) {
-      const d = new Date(ym.y, ym.m, 1 - lead + i, 12), iso = isoOf(d);
+      const d = new Date(ym.y, ym.m, 1 - lead + i, 12), iso = isoOf(d), on = sel.has(iso);
       const b = document.createElement('button'); b.textContent = d.getDate(); b.tabIndex = -1; b.dataset.iso = iso;
-      b.className = 'day' + (d.getMonth() !== ym.m ? ' out' : '') + (iso === today ? ' today' : '') + (iso === n.due_date ? ' sel' : '') + (iso === at ? ' cursor' : '');
-      b.onclick = () => pick(iso);
+      b.className = 'day' + (d.getMonth() !== ym.m ? ' out' : '') + (iso === today ? ' today' : '') + (on ? ' sel' : '') + (iso === at ? ' cursor' : '')
+        + (on && i % 7 > 0 && sel.has(shiftISO(iso, -1)) ? ' join-l' : '') + (on && i % 7 < 6 && sel.has(shiftISO(iso, 1)) ? ' join-r' : '');  // picked neighbours in a week read as one bar
+      b.onclick = e => (e.shiftKey ? stretch : e.ctrlKey || e.metaKey ? toggle : only)(iso);
       grid.appendChild(b);
     }
     box.appendChild(grid);
@@ -918,21 +968,26 @@ function duePicker(n) {
     for (const s of ['morning', 'afternoon', 'evening']) {
       const b = document.createElement('button'); b.textContent = s[0].toUpperCase() + s.slice(1);
       b.className = n.due_slot === s ? 'sel' : '';
-      b.onclick = () => { setDue(n, n.due_date || today, n.due_slot === s ? null : s); draw(); };
+      b.onclick = () => { const ds = daysOf(n); setDays(n, ds.length ? ds : [today], n.due_slot === s ? null : s); draw(); };
       slots.appendChild(b);
     }
     const clear = document.createElement('button'); clear.className = 'clear'; clear.textContent = 'Clear';
-    clear.onclick = () => { setDue(n, null, null); done(); };
+    clear.onclick = () => { setDays(n, [], null); done(); };
     slots.appendChild(clear);
     box.appendChild(slots);
     if (box.isConnected && !box.contains(document.activeElement)) box.focus({ preventScroll: true });  // a click redrew the button it landed on
   };
-  // Arrows walk the days (into the next or previous month), PageUp/PageDown flip months, Enter picks, Escape leaves it as it was.
+  // Arrows walk the days (into the next or previous month) and Shift+arrows stretch a run from where the cursor was; Space adds or removes
+  // the day under the cursor; PageUp/PageDown flip months; Enter picks the day the cursor was moved to and closes; Escape just closes.
   box.addEventListener('keydown', e => {
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
-    if (step && !e.ctrlKey && !e.metaKey && !e.altKey) { cur.setDate(cur.getDate() + step); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); draw(); }
-    else if (e.key === 'PageUp' || e.key === 'PageDown') shiftMonth(e.key === 'PageUp' ? -1 : 1);
-    else if (e.key === 'Enter') { if (isoOf(cur) !== n.due_date) setDue(n, isoOf(cur), n.due_slot); done(); }
+    if (step && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const to = shiftISO(isoOf(cur), step);
+      if (e.shiftKey) stretch(to); else { goTo(to); anchor = null; armed = true; draw(); }
+    }
+    else if (e.key === 'PageUp' || e.key === 'PageDown') { anchor = null; shiftMonth(e.key === 'PageUp' ? -1 : 1); }
+    else if (e.key === ' ') toggle(isoOf(cur));
+    else if (e.key === 'Enter') { const at = isoOf(cur); if (armed && !daysOf(n).includes(at)) setDays(n, [at], n.due_slot); done(); }
     else if (e.key === 'Escape') done();
     else return;
     e.preventDefault(); e.stopPropagation();
@@ -1040,7 +1095,7 @@ function helpPanel() {
     ['Ctrl+/', 'Move to another section'], ['Drag the grip', 'Reorder; drop on a section title to move into it'],
     ['↑ / ↓', 'Previous / next item'], ['Ctrl+Enter', 'Done / not done'],
     ['Ctrl+Shift+1 2 3 4', 'Urgent / Soon / Normal / Later'], ['Ctrl+Shift+0', 'No priority'],
-    ['Ctrl+D', 'Due date: arrows pick the day, Enter saves'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
+    ['Ctrl+D', 'Due date: arrows pick the day, Enter saves. Several days: Ctrl+click adds or removes one, Shift+click fills every day up to it (keyboard: Shift+arrows, Space)'], ['Ctrl+B', 'Waiting on someone / something (bump or clear from the same place)'],
     ['Ctrl+.', 'Notes on the item (emails, links, details); Esc hides them again'],
     ['Ctrl+Shift+H', 'Heading ↔ task'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
     ['Alt+Shift+← / →', 'Previous / next tab'], ['Shift+click · Ctrl+click · Shift+↑↓', 'Select several rows; then Enter (done), Delete, or drag one handle to move them all'],
@@ -1120,8 +1175,8 @@ function renderOutline(main, hits, extra) {
   const hit = new Set(hits);
   for (const el of $$('.node.task', tree)) if (!hit.has(+el.dataset.id)) el.classList.add('ctx');  // a parent shown only for context
 }
-// On Today's due list: overdue or due today by its own date, or a parent task's.
-function dueBy(n, t = todayISO()) { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (c.due_date && c.due_date <= t) return true; } return false; }
+// On Today's due list: due today or overdue by its own days, or a parent task's.
+function dueBy(n, t = todayISO()) { for (let c = n; c; c = c.parent_id != null ? S.nodes.get(c.parent_id) : null) { if (c.kind !== 'task') break; if (onToday(c, t)) return true; } return false; }
 const pinnedIds = () => [...S.pinned].filter(id => { const x = S.nodes.get(id); return x && x.kind === 'task' && !x.done_at; });
 function renderToday(main) {
   main.innerHTML = '';
@@ -1182,7 +1237,8 @@ async function renderHistory(main) {
     tr.children[1].textContent = r.action;
     tr.children[2].textContent = r.snapshot;
     const clip = v => (v || '∅').replace(/\s+/g, ' ').slice(0, 140);
-    tr.children[3].textContent = r.action === 'edit' ? `${r.field}: ${clip(r.old)} → ${clip(r.new)}` : '';
+    const show = v => r.field === 'due' ? clip(v).replaceAll(',', ', ') : clip(v);  // several due days: spaced, so the line can wrap
+    tr.children[3].textContent = r.action === 'edit' ? `${r.field}: ${show(r.old)} → ${show(r.new)}` : '';
     table.appendChild(tr);
   }
   main.appendChild(table);
