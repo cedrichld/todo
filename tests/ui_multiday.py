@@ -74,6 +74,9 @@ async def main():
     S2 = make('sort: later', h, due_days=days(-5, 3)); S1 = make('sort: sooner', h, due_date=d(1))
     B1 = make('pick me', h); B2 = make('keys', h); B3 = make('month end', h); B4 = make('becomes a heading', h, due_days=days(11, 12))
     B5 = make('goes red, then back', h, priority='later')
+    R0 = make('re-sort: above', h); R1 = make('re-sort: below', h)
+    E1 = make('enter keeps', h); U1 = make('quick red', h, priority='later'); G1 = make('after a drag', h, due_date=d(0)); G2 = make('dragged', h)
+    Q = make('selection parent', h, due_date=d(0)); X = make('selection kid', Q, due_date=d(7)); Y = make('selection other', h, due_date=d(0))
     C1 = make('leaves today', h, due_date=d(0)); C2 = make('stays today', h, due_date=d(0)); C3 = make('undated', h)
     async with async_playwright() as p:
         b = await getattr(p, os.environ.get('BROWSER', 'chromium')).launch()
@@ -162,6 +165,21 @@ async def main():
         await pg.keyboard.press('Control+Shift+z'); await pg.keyboard.press('Control+Shift+z'); await pg.wait_for_timeout(900); n = tree()[B5]
         check('...and redo puts both back', (n['due_days'], n['priority'], n['auto_urgent']) == (days(0, 1), 'urgent', d(0)), (n['due_days'], n['priority']))
 
+        await open_cal(U1); await pick(d(6)); await pick(d(0), 'Control'); await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300)
+        await pg.keyboard.press('Control+z'); await pg.wait_for_timeout(700); n = tree()[U1]
+        check('quick picks that end up turning it red undo as one step, colour included', (n['due_date'], n['due_days'], n['priority']) == (None, None, 'later'), (n['due_date'], n['due_days'], n['priority']))
+
+        # ---------------------------------------------------------------- the calendar survives the list being refetched under it
+        await pg.click('#sort-btn'); await pg.wait_for_timeout(2500)  # auto-sort on: a newly dated row moves up, and the page refetches the list
+        await open_cal(R1); await pick(d(8)); await pg.wait_for_timeout(2500)
+        check('auto-sort moved the row while its calendar was open', await popover_open() and (lambda o: o.index(R1) < o.index(R0))(await pg.evaluate("[...document.querySelectorAll('.node')].map(e => +e.dataset.id)")))
+        await pick(d(10), 'Control'); await pg.wait_for_timeout(2500)
+        t = await chip_text(R1); check('a day added after the re-sort shows on the row', due(R1) == (d(8), days(8, 10)) and t == f'{label(d(8))} +1', (due(R1), t))
+        await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300); await open_cal(R1)
+        n_sel = await pg.locator('#popover .day.sel').count(); await pick(d(12), 'Control')
+        check('...and reopening still knows every day', due(R1) == (d(8), days(8, 10, 12)), (n_sel, due(R1)))
+        await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300); await pg.click('#sort-btn'); await pg.wait_for_timeout(400)
+
         # ---------------------------------------------------------------- picking days from the keyboard
         cursor = lambda: pg.locator('#popover .day.cursor').get_attribute('data-iso')
         await pg.locator(f'.node[data-id="{B2}"] > .row > .text').click(); await pg.keyboard.press('Control+d'); await pg.wait_for_timeout(300)
@@ -180,12 +198,17 @@ async def main():
         await pg.wait_for_timeout(400); check('after moving away, Shift+arrow adds a run from there', due(B2) == (d(7), days(7, 9, 10)), due(B2))
         await pg.keyboard.press('Shift+ArrowLeft'); await pg.wait_for_timeout(400); check('Shift+arrow back shrinks it', due(B2) == (d(7), days(7, 9)), due(B2))
         await pg.keyboard.press('Escape'); await pg.wait_for_timeout(300)
+        await open_cal(E1); await pick(d(2), 'Control'); await pick(d(4), 'Control'); await pg.click('#popover .next'); await pg.wait_for_timeout(200); await pg.keyboard.press('Enter'); await pg.wait_for_timeout(400)
+        check('Enter keeps the days picked in this sitting, wherever the calendar was flipped to', not await popover_open() and due(E1) == (d(2), days(2, 4)), due(E1))
+        await open_cal(E1)
+        for k in ('Shift+ArrowRight', 'Shift+ArrowRight', 'ArrowRight', 'Enter'): await pg.keyboard.press(k)
+        await pg.wait_for_timeout(500); check('...also after Shift+arrows and one step further', not await popover_open() and due(E1) == (d(2), days(2, 3, 4)), due(E1))
 
         # ---------------------------------------------------------------- a run across the month end
         nxt = (TODAY.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
         span = [(nxt + datetime.timedelta(days=k)).isoformat() for k in range(-3, 2)]
         await open_cal(B3)
-        await pick(span[0]); await pick(span[-1], 'Shift'); check('a Shift run across the month end fills every day', due(B3) == (span[0], ','.join(span)), due(B3))
+        await pick(span[0]); await pg.keyboard.press('PageDown'); await pg.wait_for_timeout(150); await pick(span[-1], 'Shift'); check('a Shift run across the month end (PageDown to get there) fills every day from the day clicked', due(B3) == (span[0], ','.join(span)), due(B3))
         marked = "(span) => { const c = [...document.querySelectorAll('#popover .day')]; return c.filter(e => span.includes(e.dataset.iso)).every(e => e.classList.contains('sel')) && c.filter(e => e.classList.contains('sel')).every(e => span.includes(e.dataset.iso)); }"
         ok1 = await pg.evaluate(marked, span); await cell(span[-1]); await pg.click('#popover .next'); await pg.click('#popover .prev'); await pg.wait_for_timeout(200); ok2 = await pg.evaluate(marked, span)
         check('...and both months show it marked', ok1 and ok2 and await pg.locator('#popover .day.sel').count() >= 2, (ok1, ok2))
@@ -203,6 +226,12 @@ async def main():
         check('History lists the days of a change with room to wrap', await pg.locator('table.history .h-detail', has_text=days(4, 5, 6).replace(',', ', ')).count() >= 1)
 
         # ---------------------------------------------------------------- Today follows a date change without a reload
+        await pg.click('#tabs button[data-view="all"]'); await pg.wait_for_timeout(400)
+        await pg.locator(f'.node[data-id="{G2}"] > .row').hover(); rh = (await pg.locator(f'.node[data-id="{B2}"] > .row').bounding_box())['height']
+        await pg.drag_and_drop(f'.node[data-id="{G2}"] > .row > .handle', f'.node[data-id="{B2}"] > .row', target_position={'x': 200, 'y': rh - 4}); await pg.wait_for_timeout(600)
+        await pg.keyboard.press('Alt+Shift+ArrowRight'); await pg.wait_for_timeout(500)  # to Today by keyboard: no mouse press since the drag
+        await pg.evaluate(f"focusNode({G1}, 'end')"); await pg.keyboard.press('Control+d'); await pg.wait_for_timeout(300); await pg.keyboard.press('ArrowRight'); await pg.keyboard.press('Enter'); await pg.wait_for_timeout(600)
+        check('after dragging a row, a keyboard re-date still leaves Today at once', due(G1) == (d(1), None) and await pg.locator(f'#view .node[data-id="{G1}"]').count() == 0, due(G1))
         await pg.click('#tabs button[data-view="today"]'); await pg.wait_for_timeout(500)
         row = lambda id: pg.locator(f'#view .node[data-id="{id}"]').count()
         n0 = await badge(); check('a task due today is on the list', await row(C1) == 1)
@@ -217,6 +246,14 @@ async def main():
         check('a task typed into Today is due today', due(T) == (d(0), None) and await row(T) == 1, due(T))
         await pg.keyboard.press('Control+d'); await pg.wait_for_timeout(300); await pg.keyboard.press('ArrowRight'); await pg.keyboard.press('Enter'); await pg.wait_for_timeout(600)
         check('...and once re-dated it leaves too', due(T) == (d(1), None) and await row(T) == 0, (due(T), await row(T)))
+        await pg.keyboard.press('Enter'); await pg.wait_for_timeout(500); await pg.keyboard.press('Delete'); await pg.wait_for_timeout(500)
+        check('keys pressed after it left do not reach the hidden task', T in tree() and tree()[T]['done_at'] is None, T in tree())
+        # 6: a selection re-dated from a row that keeps its own date
+        await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
+        await pg.locator(f'.node[data-id="{X}"] > .row > .text').click(modifiers=['Control']); await pg.locator(f'.node[data-id="{Y}"] > .row > .text').click(modifiers=['Control']); await pg.wait_for_timeout(200)
+        await chip(X).click(); await pg.wait_for_timeout(300); await pick(d(7)); await pg.keyboard.press('Escape'); await pg.wait_for_timeout(500)
+        check('re-dating a selection: each task that moved off today leaves, even when the clicked row kept its date', due(Y) == (d(7), None) and await row(Y) == 0 and await row(X) == 1, (due(Y), await row(Y), await row(X)))
+        await pg.keyboard.press('Escape'); await pg.wait_for_timeout(200)
         await pg.locator('.view-switch button').nth(1).click(); await pg.wait_for_timeout(400)
         check('Everything else lists an undated task', await row(C3) == 1)
         await open_cal(C3); await pick(d(0)); await pg.mouse.click(900, 40); await pg.wait_for_timeout(500)

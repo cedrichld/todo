@@ -474,10 +474,11 @@ function pushUndo(entry) {
   entry.t = Date.now();
   const top = undoState.stack.at(-1);
   if (top && entry.type === 'patch' && top.type === 'patch' && top.id === entry.id && top.label === entry.label && !undoState.redo.length
-      && entry.t - top.t < 1500 && Object.keys(top.new).join() === Object.keys(entry.new).join()) { top.new = entry.new; top.t = entry.t; return; }
+      && entry.t - top.t < 1500 && Object.keys(top.new).join() === Object.keys(entry.new).join()) { top.new = entry.new; top.t = entry.t; return top; }
   undoState.stack.push(entry);
   if (undoState.stack.length > undoState.max) undoState.stack.shift();
   undoState.redo.length = 0;
+  return entry;  // the step that holds this change: the one before it when the two merged
 }
 function pushTextUndo(id, oldText, newText, field = 'text') {
   const top = undoState.stack.at(-1);
@@ -558,8 +559,7 @@ function patchFields(n, fields, label) {
   for (const k of Object.keys(fields)) { old[k] = n[k]; nu[k] = fields[k]; }
   if (fields.kind === 'heading') { for (const k of ['priority', 'due_date', 'due_days', 'due_slot', 'done_at']) old[k] = n[k]; Object.assign(n, { priority: 'none', due_date: null, due_days: null, due_slot: null, done_at: null }); }
   Object.assign(n, fields);
-  const entry = { type: 'patch', id: n.id, old, new: nu, label };
-  pushUndo(entry);
+  const entry = pushUndo({ type: 'patch', id: n.id, old, new: nu, label });
   return queue.run(() => api.patch(n.id, fields)).then(r => {
     // the store may tag a task red because it came due: show it, and fold it into the same undo step
     for (const k of ['priority', 'color', 'auto_urgent']) if (r[k] !== n[k]) { if (!(k in entry.old)) entry.old[k] = n[k]; entry.new[k] = r[k]; n[k] = r[k]; }
@@ -882,8 +882,14 @@ function onGlobalKey(e) {
 let popClose = null;  // set by the open popover's content (content.onPopClose): run once it goes away, however it is closed
 let mouseHeld = false;  // a press is in progress: redrawing the rows now would swallow the click it ends in
 document.addEventListener('mousedown', () => { mouseHeld = true; }, true);
-document.addEventListener('mouseup', () => { mouseHeld = false; }, true);
-function renderSoon() { if (!mouseHeld) return render(); document.addEventListener('mouseup', () => setTimeout(render, 0), { once: true, capture: true }); }
+for (const ev of ['mouseup', 'dragend', 'blur']) window.addEventListener(ev, () => { mouseHeld = false; }, true);  // a drag ends without a mouseup
+// Redraw the view; a row that is no longer shown stops being the one the keys act on.
+function redraw() { render(); if (S.current != null && !$(`#view .node[data-id="${S.current}"]`)) setCurrent(null); }
+function renderSoon() {
+  if (!mouseHeld) return redraw();
+  const go = () => { for (const ev of ['mouseup', 'dragend']) document.removeEventListener(ev, go, true); setTimeout(redraw, 0); };
+  for (const ev of ['mouseup', 'dragend']) document.addEventListener(ev, go, true);
+}
 function openPopover(anchor, content, { fixed = false, kind = '' } = {}) {
   const pop = $('#popover');
   if (popClose) {  // one popover replaces another: the old one finishes first, which may redraw the rows and so replace the anchor
@@ -921,27 +927,31 @@ function priorityPicker(n) {
 function duePicker(n) {
   const box = document.createElement('div'); box.className = 'due'; box.tabIndex = -1;
   const back = document.activeElement, fromText = !!back?.classList?.contains('text');  // where the keys go back to once the calendar closes
+  const node = () => getNode(n.id) || n;  // the list may be refetched while the calendar is open (auto-sort, undo): always the task as it is now
   const cur = parseISO(dueDay(n) || todayISO()); cur.setHours(12, 0, 0, 0);  // the keyboard cursor: starts on the next day the task is due, else today
   const ym = { y: cur.getFullYear(), m: cur.getMonth() };
-  // Shift fills every day from `anchor` (the day last clicked or toggled; null = wherever the cursor is) on top of `base`, the days
+  // Shift fills every day from `anchor` (the day last clicked or toggled; before any, wherever the cursor is) on top of `base`, the days
   // picked before that run began: a second Shift+click moves the end of the run instead of starting another.
   let anchor = null, base = [];
-  let armed = true;  // the cursor moved since the last pick (or nothing is picked yet): Enter picks the day it is on
-  const opened = daysOf(n).join();
-  // On Today, a task joins or leaves the list once the calendar closes, not while its days are still being picked.
-  box.onPopClose = () => { if (S.view === 'today' && daysOf(n).join() !== opened) renderSoon(); };
+  let moved = false;    // the cursor was walked by keys (or a month flipped) since the last pick: Shift+arrows start a new run where it stands
+  let armed = true;     // nothing picked in this sitting yet: Enter picks the day the cursor is on. Once days are picked, Enter only closes
+  let touched = false;  // something was changed in this sitting
+  // On Today, tasks join or leave the list once the calendar closes, not while days are still being picked.
+  box.onPopClose = () => { if (S.view === 'today' && touched) renderSoon(); };
   const done = () => { closePopover(); if (fromText && $(`.node[data-id="${n.id}"]`)) focusNode(n.id, 'end'); else if (back?.isConnected) back.focus(); };
   const goTo = iso => { cur.setTime(parseISO(iso).getTime()); cur.setHours(12); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); };
-  const put = days => { armed = false; setDays(n, days, n.due_slot); draw(); };
+  const save = (days, slot) => { touched = true; setDays(node(), days, slot); };
+  const put = days => { armed = false; moved = false; save(days, node().due_slot); draw(); };
   const only = iso => { goTo(iso); anchor = iso; base = [iso]; put([iso]); };
-  const toggle = iso => { goTo(iso); const ds = daysOf(n); anchor = iso; base = ds.includes(iso) ? ds.filter(d => d !== iso) : [...ds, iso]; put(base); };
-  const stretch = iso => {
-    if (anchor == null) { anchor = isoOf(cur); base = daysOf(n); }
+  const toggle = iso => { goTo(iso); const ds = daysOf(node()); anchor = iso; base = ds.includes(iso) ? ds.filter(d => d !== iso) : [...ds, iso]; put(base); };
+  // A Shift+click always runs from the last day clicked; Shift+arrows, after the cursor was walked away, run from where it stands.
+  const stretch = (iso, byKeys) => {
+    if (anchor == null || (byKeys && moved)) { anchor = isoOf(cur); base = daysOf(node()); }
     goTo(iso);
     const run = []; for (let d = anchor < iso ? anchor : iso, end = anchor < iso ? iso : anchor; d <= end; d = shiftISO(d, 1)) run.push(d);
     put([...base, ...run]);
   };
-  const shiftMonth = k => { const day = cur.getDate(); cur.setDate(1); cur.setMonth(cur.getMonth() + k); cur.setDate(Math.min(day, new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate())); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); armed = true; draw(); };
+  const shiftMonth = k => { const day = cur.getDate(); cur.setDate(1); cur.setMonth(cur.getMonth() + k); cur.setDate(Math.min(day, new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate())); ym.y = cur.getFullYear(); ym.m = cur.getMonth(); moved = true; draw(); };
   const draw = () => {
     box.innerHTML = '';
     const head = document.createElement('div'); head.className = 'cal-head';
@@ -954,40 +964,40 @@ function duePicker(n) {
     for (const d of ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']) { const s = document.createElement('span'); s.className = 'dow'; s.textContent = d; grid.appendChild(s); }
     // whole weeks: the ends of the months either side fill the first and last rows, faded but pickable
     const first = new Date(ym.y, ym.m, 1, 12), lead = (first.getDay() + 6) % 7, days = new Date(ym.y, ym.m + 1, 0).getDate();
-    const cells = Math.ceil((lead + days) / 7) * 7, today = todayISO(), at = isoOf(cur), sel = new Set(daysOf(n));
+    const cells = Math.ceil((lead + days) / 7) * 7, today = todayISO(), at = isoOf(cur), sel = new Set(daysOf(node())), slot = node().due_slot;
     for (let i = 0; i < cells; i++) {
       const d = new Date(ym.y, ym.m, 1 - lead + i, 12), iso = isoOf(d), on = sel.has(iso);
       const b = document.createElement('button'); b.textContent = d.getDate(); b.tabIndex = -1; b.dataset.iso = iso;
       b.className = 'day' + (d.getMonth() !== ym.m ? ' out' : '') + (iso === today ? ' today' : '') + (on ? ' sel' : '') + (iso === at ? ' cursor' : '')
         + (on && i % 7 > 0 && sel.has(shiftISO(iso, -1)) ? ' join-l' : '') + (on && i % 7 < 6 && sel.has(shiftISO(iso, 1)) ? ' join-r' : '');  // picked neighbours in a week read as one bar
-      b.onclick = e => (e.shiftKey ? stretch : e.ctrlKey || e.metaKey ? toggle : only)(iso);
+      b.onclick = e => e.shiftKey ? stretch(iso, false) : e.ctrlKey || e.metaKey ? toggle(iso) : only(iso);
       grid.appendChild(b);
     }
     box.appendChild(grid);
     const slots = document.createElement('div'); slots.className = 'slots';
     for (const s of ['morning', 'afternoon', 'evening']) {
       const b = document.createElement('button'); b.textContent = s[0].toUpperCase() + s.slice(1);
-      b.className = n.due_slot === s ? 'sel' : '';
-      b.onclick = () => { const ds = daysOf(n); setDays(n, ds.length ? ds : [today], n.due_slot === s ? null : s); draw(); };
+      b.className = slot === s ? 'sel' : '';
+      b.onclick = () => { const ds = daysOf(node()); save(ds.length ? ds : [today], node().due_slot === s ? null : s); draw(); };
       slots.appendChild(b);
     }
     const clear = document.createElement('button'); clear.className = 'clear'; clear.textContent = 'Clear';
-    clear.onclick = () => { setDays(n, [], null); done(); };
+    clear.onclick = () => { save([], null); done(); };
     slots.appendChild(clear);
     box.appendChild(slots);
     if (box.isConnected && !box.contains(document.activeElement)) box.focus({ preventScroll: true });  // a click redrew the button it landed on
   };
-  // Arrows walk the days (into the next or previous month) and Shift+arrows stretch a run from where the cursor was; Space adds or removes
-  // the day under the cursor; PageUp/PageDown flip months; Enter picks the day the cursor was moved to and closes; Escape just closes.
+  // Arrows walk the days (into the next or previous month) and Shift+arrows stretch a run; Space adds or removes the day under the cursor;
+  // PageUp/PageDown flip months; Enter closes, first picking the day the cursor is on if nothing was picked in this sitting; Escape just closes.
   box.addEventListener('keydown', e => {
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
     if (step && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const to = shiftISO(isoOf(cur), step);
-      if (e.shiftKey) stretch(to); else { goTo(to); anchor = null; armed = true; draw(); }
+      if (e.shiftKey) stretch(to, true); else { goTo(to); moved = true; draw(); }
     }
-    else if (e.key === 'PageUp' || e.key === 'PageDown') { anchor = null; shiftMonth(e.key === 'PageUp' ? -1 : 1); }
+    else if (e.key === 'PageUp' || e.key === 'PageDown') shiftMonth(e.key === 'PageUp' ? -1 : 1);
     else if (e.key === ' ') toggle(isoOf(cur));
-    else if (e.key === 'Enter') { const at = isoOf(cur); if (armed && !daysOf(n).includes(at)) setDays(n, [at], n.due_slot); done(); }
+    else if (e.key === 'Enter') { const at = isoOf(cur); if (armed && !daysOf(node()).includes(at)) save([at], node().due_slot); done(); }
     else if (e.key === 'Escape') done();
     else return;
     e.preventDefault(); e.stopPropagation();

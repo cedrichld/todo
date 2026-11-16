@@ -58,3 +58,8 @@ Anti-goal: anything that changes how a single-day task looks or behaves.
 - Sorting ("earlier due first"), the parent's "sub-tasks due" line and Insights' overdue count use
   the next day still ahead, or the last day once all have passed.
 - Re-dating a task you just typed into Today un-pins it, so it leaves the list like any other.
+- Enter picks the day under the cursor only when nothing was picked in that sitting (the old "arrows, then Enter" way of
+  setting one date). Once days were clicked, toggled or stretched, Enter just closes and keeps them.
+- Shift+click always runs from the last day clicked; Shift+arrows, after the cursor was walked away, run from where it stands.
+- After review (2026-11-16): the calendar reads the task afresh on every action, since the list can be refetched while it is
+  open; a row that leaves Today stops receiving keys; a selection re-dated from any of its rows refreshes Today.
